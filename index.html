@@ -22,6 +22,10 @@
   button:active { transform: scale(.97); }
   #hud { position: absolute; top: calc(16px + env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font-size: 56px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,.7); pointer-events: none; }
   #hint { position: absolute; bottom: calc(24px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 15px; text-shadow: 0 1px 4px rgba(0,0,0,.8); pointer-events: none; opacity: .85; }
+  #who { position: absolute; top: calc(22px + env(safe-area-inset-top)); left: 16px; font-size: 15px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.8); pointer-events: none; opacity: .9; }
+  #opts { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 16px; }
+  #opts button { margin: 0; }
+  #opts button.alt { background: #fff; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -30,11 +34,13 @@
   <video id="cam" autoplay muted playsinline></video>
   <canvas id="game"></canvas>
   <div id="hud" class="hidden">0</div>
+  <div id="who" class="hidden"></div>
   <div id="hint" class="hidden"></div>
   <div id="ui">
     <h1>Push Day Killer 💀</h1>
     <p id="msg">Prop your phone on the floor in front of you, screen facing you, so it can see your shoulders. Push-ups steer the diver. Squeeze through the cave.</p>
     <p id="sub"></p>
+    <div id="opts"></div>
     <button id="btn">Start</button>
   </div>
 </div>
@@ -42,7 +48,7 @@
 <script type="module">
 const $ = id => document.getElementById(id);
 const video = $('cam'), canvas = $('game'), ctx = canvas.getContext('2d');
-const ui = $('ui'), msg = $('msg'), sub = $('sub'), btn = $('btn'), hud = $('hud'), hint = $('hint');
+const ui = $('ui'), msg = $('msg'), sub = $('sub'), btn = $('btn'), hud = $('hud'), hint = $('hint'), who = $('who'), opts = $('opts');
 
 let W, H, DPR;
 function resize() {
@@ -124,22 +130,17 @@ async function sample(seconds, label) {
   return vals.length ? vals[Math.floor(vals.length / 2)] : null;
 }
 
-async function calibrate() {
+async function calibrate(name) {
   btn.classList.add('hidden');
-  msg.textContent = 'Get into push-up position with your arms straight.';
+  msg.textContent = `${name}: get into push-up position with your arms straight.`;
   await wait(1500);
   const t = await sample(3, 'Hold the TOP');
   msg.textContent = 'Now lower yourself all the way down and hold.';
   await wait(1500);
   const b = await sample(3, 'Hold the BOTTOM');
   sub.textContent = '';
-  if (t === null || b === null || Math.abs(b - t) < 0.05) {
-    msg.textContent = "I couldn't see your shoulders move enough. Make sure your head and shoulders are in the shot and try again.";
-    btn.textContent = 'Retry'; btn.classList.remove('hidden');
-    return false;
-  }
-  topY = t; botY = b;
-  return true;
+  if (t === null || b === null || Math.abs(b - t) < 0.05) return null;
+  return { top: t, bot: b };
 }
 
 // ---------- Game ----------
@@ -189,14 +190,11 @@ function update(dt) {
   pipes = pipes.filter(p => p.x + PIPE_W > -10);
 }
 
+let onDeath = null;
 function die() {
   dead = true; running = false;
-  best = Math.max(best, score); localStorage.setItem('pdk-best', best);
-  msg.innerHTML = `<span class="big">${score}</span><br>pipes cleared`;
-  sub.textContent = `Best: ${best}`;
-  btn.textContent = 'Play again'; btn.classList.remove('hidden');
-  ui.classList.remove('hidden'); hint.classList.add('hidden');
   if (navigator.vibrate) navigator.vibrate(200);
+  if (onDeath) onDeath();
 }
 
 // Jagged rock spike. dir = 1 hangs from the ceiling (tip at tipY), dir = -1 rises from the floor.
@@ -306,43 +304,113 @@ function loop(t) {
 }
 
 // ---------- Flow ----------
-let ready = false;
-btn.addEventListener('click', async () => {
-  if (!ready) {
-    btn.disabled = true; btn.textContent = 'Loading…';
-    try {
-      msg.textContent = 'Loading pose tracker…';
-      detector = await loadDetector();
-    } catch (e) {
-      console.error(e);
-      msg.textContent = 'Pose tracker failed to load. Check your connection and retry.';
-      btn.disabled = false; btn.textContent = 'Retry'; return;
+// The whole session is one linear async script: tap-to-continue prompts, calibration, then runs.
+function tap(label) {
+  return new Promise(res => {
+    btn.textContent = label; btn.disabled = false; btn.classList.remove('hidden');
+    btn.onclick = () => { btn.onclick = null; btn.classList.add('hidden'); res(); };
+  });
+}
+function choose(options) {
+  return new Promise(res => {
+    btn.classList.add('hidden'); opts.innerHTML = '';
+    for (const o of options) {
+      const b = document.createElement('button'); b.textContent = o.label; if (o.alt) b.className = 'alt';
+      b.onclick = () => { opts.innerHTML = ''; res(o.value); };
+      opts.appendChild(b);
     }
-    try {
-      msg.textContent = 'Starting camera…';
-      await startCamera();
-      ready = true;
-    } catch (e) {
-      console.error(e);
-      msg.textContent = 'Camera not available. Touch mode: drag your finger up and down to fly.';
-      enableTouchMode(); ready = true;
-    }
-    btn.disabled = false;
-    if (!touchMode) {
-      const ok = await calibrate();
-      if (!ok) { ready = false; return; }
-    }
-  } else if (!touchMode && btn.textContent === 'Retry') {
-    const ok = await calibrate();
-    if (!ok) return;
+  });
+}
+function showUI(text, subText = '') { msg.innerHTML = text; sub.textContent = subText; ui.classList.remove('hidden'); }
+
+async function calibratePlayer(name) {
+  if (touchMode) return { top: 0.1, bot: 0.9 };
+  for (;;) {
+    const cal = await calibrate(name);
+    if (cal) return cal;
+    showUI("I couldn't see your shoulders move enough. Make sure your head and shoulders are in the shot and try again.");
+    await tap('Retry');
   }
-  // countdown
-  btn.classList.add('hidden');
-  for (const n of ['3', '2', '1', 'GO']) { msg.innerHTML = `<span class="big">${n}</span>`; sub.textContent = ''; await wait(700); }
+}
+
+// One run: countdown, play until death, resolve with the score.
+async function playRun(cal, label) {
+  topY = cal.top; botY = cal.bot;
+  for (const n of ['3', '2', '1', 'GO']) { showUI(`<span class="big">${n}</span>`); await wait(700); }
   reset();
+  who.textContent = label; who.classList.toggle('hidden', !label);
   ui.classList.add('hidden'); hud.classList.remove('hidden'); hint.classList.remove('hidden');
   running = true;
-});
+  await new Promise(res => { onDeath = res; });
+  onDeath = null;
+  hint.classList.add('hidden'); who.classList.add('hidden'); hud.classList.add('hidden');
+  return score;
+}
+
+async function solo() {
+  const cal = await calibratePlayer('You');
+  for (;;) {
+    const s = await playRun(cal, '');
+    best = Math.max(best, s); localStorage.setItem('pdk-best', best);
+    showUI(`<span class="big">${s}</span><br>gaps cleared`, `Best: ${best}`);
+    await tap('Play again');
+  }
+}
+
+async function twoPlayer() {
+  showUI('How many lives each?');
+  const lives = await choose([{ label: '1', value: 1 }, { label: '3', value: 3 }, { label: '5', value: 5 }]);
+  const players = [{ name: 'Player 1', cal: null, score: 0 }, { name: 'Player 2', cal: null, score: 0 }];
+  for (const p of players) {
+    showUI(`${p.name}: get in position in front of the camera.`);
+    await tap(`${p.name} ready`);
+    p.cal = await calibratePlayer(p.name);
+  }
+  for (;;) {
+    for (const p of players) p.score = 0;
+    for (let life = 1; life <= lives; life++) {
+      for (const p of players) {
+        const other = players[1 - players.indexOf(p)];
+        showUI(`${p.name}, you're up. Life ${life} of ${lives}.`, `${players[0].name}: ${players[0].score} · ${players[1].name}: ${players[1].score}`);
+        await tap(`${p.name} ready`);
+        const s = await playRun(p.cal, `${p.name} · life ${life}/${lives}`);
+        p.score += s;
+        showUI(`<span class="big">${s}</span><br>${p.name} cleared ${s} gap${s === 1 ? '' : 's'}`, `Total · ${players[0].name}: ${players[0].score} · ${players[1].name}: ${players[1].score}`);
+        await wait(1800);
+      }
+    }
+    const [a, b] = players;
+    const title = a.score === b.score ? 'Draw!' : `${a.score > b.score ? a.name : b.name} wins!`;
+    showUI(`<span class="big">${title}</span>`, `${a.name}: ${a.score} · ${b.name}: ${b.score}`);
+    const again = await choose([{ label: 'Rematch', value: true }, { label: 'New players', value: false, alt: true }]);
+    if (!again) return location.reload();
+  }
+}
+
+async function main() {
+  await tap('Start');
+  btn.disabled = true;
+  try {
+    showUI('Loading pose tracker…');
+    detector = await loadDetector();
+  } catch (e) {
+    console.error(e);
+    showUI('Pose tracker failed to load. Check your connection and retry.');
+    await tap('Retry'); return main();
+  }
+  try {
+    showUI('Starting camera…');
+    await startCamera();
+  } catch (e) {
+    console.error(e);
+    showUI('Camera not available. Touch mode: drag your finger up and down to swim.');
+    enableTouchMode();
+  }
+  showUI('Who\'s playing?');
+  const mode = await choose([{ label: 'Solo', value: 'solo' }, { label: '2 Player', value: 'duo', alt: true }]);
+  if (mode === 'solo') await solo(); else await twoPlayer();
+}
+main();
 
 window.__pdk = { get pipes() { return pipes; }, get birdY() { return birdY; } }; // debug hook
 requestAnimationFrame(loop);
