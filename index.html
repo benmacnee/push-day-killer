@@ -33,7 +33,7 @@
   <div id="hint" class="hidden"></div>
   <div id="ui">
     <h1>Push Day Killer 💀</h1>
-    <p id="msg">Prop your phone on the floor in front of you, screen facing you. Push-ups move the bird. Fly through the gaps.</p>
+    <p id="msg">Prop your phone on the floor in front of you, screen facing you, so it can see your shoulders. Push-ups fly the plane. Get through the gaps.</p>
     <p id="sub"></p>
     <button id="btn">Start</button>
   </div>
@@ -65,15 +65,15 @@ async function startCamera() {
 
 async function loadDetector() {
   const base = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-  const { FaceDetector, FilesetResolver } = await import(base);
+  const { PoseLandmarker, FilesetResolver } = await import(base);
   const vision = await FilesetResolver.forVisionTasks(base + '/wasm');
-  const model = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+  const model = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
   for (const delegate of ['GPU', 'CPU']) {
     try {
-      return await FaceDetector.createFromOptions(vision, { baseOptions: { modelAssetPath: model, delegate }, runningMode: 'VIDEO', minDetectionConfidence: 0.5 });
+      return await PoseLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: model, delegate }, runningMode: 'VIDEO', numPoses: 1 });
     } catch (e) { console.warn('delegate failed', delegate, e); }
   }
-  throw new Error('Face detector failed to load');
+  throw new Error('Pose tracker failed to load');
 }
 
 let lastVideoTime = -1;
@@ -82,11 +82,11 @@ function pollFace() {
   if (video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
   const res = detector.detectForVideo(video, performance.now());
-  const d = res.detections && res.detections[0];
-  if (d) {
-    const b = d.boundingBox;
-    // Normalised face centre (0 = top of frame, 1 = bottom). Weighted toward the top of the box, which is more stable than the chin.
-    const y = (b.originY + b.height * 0.4) / video.videoHeight;
+  const lm = res.landmarks && res.landmarks[0];
+  // Landmarks 11 and 12 are the shoulders. Tracking them (not the head) means nodding doesn't count.
+  const l = lm && lm[11], r = lm && lm[12];
+  if (l && r && (l.visibility ?? 1) > 0.4 && (r.visibility ?? 1) > 0.4) {
+    const y = (l.y + r.y) / 2; // normalised, 0 = top of frame
     faceY = faceY === null ? y : faceY + (y - faceY) * 0.45;
     faceSeen = true;
   } else {
@@ -134,7 +134,7 @@ async function calibrate() {
   const b = await sample(3, 'Hold the BOTTOM');
   sub.textContent = '';
   if (t === null || b === null || Math.abs(b - t) < 0.05) {
-    msg.textContent = "I couldn't see your face move enough. Make sure your face is in the shot and try again.";
+    msg.textContent = "I couldn't see your shoulders move enough. Make sure your head and shoulders are in the shot and try again.";
     btn.textContent = 'Retry'; btn.classList.remove('hidden');
     return false;
   }
@@ -143,12 +143,13 @@ async function calibrate() {
 }
 
 // ---------- Game ----------
-const BIRD_X_FRAC = 0.3, BIRD_R = 18;
-const PIPE_W = 70, GAP_FRAC = 0.30, SPEED = 110, SPAWN_EVERY = 2.6;
+const BIRD_X_FRAC = 0.3, BIRD_R = 26;
+const PIPE_W = 70, GAP_FRAC = 0.30, SPEED = 137.5, SPAWN_EVERY = 2.1;
+let trail = [], trailT = 0;
 let pipes = [], birdY = H / 2, score = 0, best = +(localStorage.getItem('pdk-best') || 0), running = false, spawnT = 0, lastT = 0, dead = false;
 
 function reset() {
-  pipes = []; score = 0; spawnT = 1.2; dead = false;
+  pipes = []; trail = []; score = 0; spawnT = 1.2; dead = false;
   birdY = H / 2;
   hud.textContent = '0';
 }
@@ -166,6 +167,11 @@ function update(dt) {
     const target = birdTargetY();
     birdY += (target - birdY) * Math.min(1, dt * 10);
   }
+  // smoke trail: puffs drop off the tail and drift left with the pipes, tracing where you've been
+  trailT -= dt;
+  if (trailT <= 0) { trail.push({ x: W * BIRD_X_FRAC - 30, y: birdY + 2, age: 0, r: 4 + Math.random() * 3 }); trailT = 0.05; }
+  for (const s of trail) { s.x -= SPEED * dt; s.age += dt; s.y -= 6 * dt; }
+  trail = trail.filter(s => s.age < 3.5 && s.x > -20);
   if (dead) return;
   spawnT -= dt;
   if (spawnT <= 0) { spawnPipe(); spawnT = SPAWN_EVERY; }
@@ -197,20 +203,59 @@ function drawPipe(x, y, h) {
   ctx.strokeStyle = 'rgba(60,30,10,.7)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, PIPE_W, h);
 }
 
-function drawBird(x, y) {
+function drawTrail() {
+  for (const s of trail) {
+    const a = Math.max(0, 1 - s.age / 3.5);
+    ctx.fillStyle = `rgba(245,245,245,${(0.55 * a).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r + s.age * 4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawPlane(x, y, t) {
   ctx.save(); ctx.translate(x, y);
-  const t = (faceY !== null ? (birdTargetY() - birdY) : 0);
-  ctx.rotate(Math.max(-0.5, Math.min(0.5, t / 120)));
-  // body
-  ctx.fillStyle = '#f5d442'; ctx.beginPath(); ctx.ellipse(0, 0, BIRD_R + 2, BIRD_R, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = '#3a2a00'; ctx.lineWidth = 2; ctx.stroke();
-  // wing
-  ctx.fillStyle = '#f0a020'; ctx.beginPath(); ctx.ellipse(-6, 4, 10, 6, -0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  // eye
-  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(8, -6, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(10, -6, 3, 0, Math.PI * 2); ctx.fill();
-  // beak
-  ctx.fillStyle = '#e8562a'; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(28, 4); ctx.lineTo(14, 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+  const v = (faceY !== null ? (birdTargetY() - birdY) : 0);
+  ctx.rotate(Math.max(-0.4, Math.min(0.4, v / 150)));
+  ctx.scale(1.3, 1.3);
+  ctx.lineWidth = 2; ctx.strokeStyle = '#3a2410'; ctx.lineJoin = 'round';
+  const rr = (px, py, w, h, r) => { ctx.beginPath(); ctx.roundRect(px, py, w, h, r); ctx.fill(); ctx.stroke(); };
+  // lower wing
+  ctx.fillStyle = '#f2d16b'; rr(-24, 6, 40, 7, 3);
+  // tail fin + tailplane
+  ctx.fillStyle = '#d9342b';
+  ctx.beginPath(); ctx.moveTo(-30, 0); ctx.lineTo(-30, -16); ctx.lineTo(-20, -4); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#f2d16b'; rr(-36, -2, 16, 5, 2);
+  // fuselage
+  ctx.fillStyle = '#d9342b'; rr(-32, -6, 58, 14, 7);
+  // cockpit opening
+  ctx.fillStyle = '#7a1f16'; ctx.beginPath(); ctx.ellipse(-4, -5, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
+  // wheels
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(-8, 15, 4, 0, Math.PI * 2); ctx.arc(8, 15, 4, 0, Math.PI * 2); ctx.fill();
+  // --- dog pilot ---
+  ctx.fillStyle = '#c4884a';
+  // ears (floppy, streaming back)
+  ctx.beginPath(); ctx.ellipse(-14, -18, 5, 9, 0.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // head
+  ctx.beginPath(); ctx.arc(-4, -20, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // snout
+  ctx.fillStyle = '#e9c69a'; ctx.beginPath(); ctx.ellipse(3, -17, 6, 4.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(7, -18, 2.2, 0, Math.PI * 2); ctx.fill();
+  // goggles
+  ctx.fillStyle = 'rgba(160,220,255,.85)';
+  ctx.beginPath(); ctx.arc(-7, -23, 3.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, -23, 3.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(-6, -23, 1.3, 0, Math.PI * 2); ctx.arc(1, -23, 1.3, 0, Math.PI * 2); ctx.fill();
+  // scarf
+  ctx.strokeStyle = '#2f80ed'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-10, -8); ctx.quadraticCurveTo(-20, -6 + Math.sin(t * 20) * 2, -28, -10 + Math.sin(t * 20 + 1) * 3); ctx.stroke();
+  ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 2;
+  // upper wing + struts (drawn last so it sits in front of the pilot's chin)
+  ctx.beginPath(); ctx.moveTo(-14, -30); ctx.lineTo(-14, 6); ctx.moveTo(8, -30); ctx.lineTo(8, 6); ctx.stroke();
+  ctx.fillStyle = '#f2d16b'; rr(-24, -34, 42, 7, 3);
+  // propeller
+  ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(27, 1, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.save(); ctx.translate(27, 1); ctx.rotate(t * 40);
+  ctx.fillStyle = 'rgba(80,80,80,.8)'; ctx.beginPath(); ctx.ellipse(0, 0, 2.5, 16, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
   ctx.restore();
 }
 
@@ -222,9 +267,10 @@ function draw() {
     // caps
     drawPipe(p.x - 6, p.gapY - 26, 26); drawPipe(p.x - 6, p.gapY + p.gap, 26);
   }
-  drawBird(W * BIRD_X_FRAC, birdY);
+  drawTrail();
+  drawPlane(W * BIRD_X_FRAC, birdY, performance.now() / 1000);
   if (running && !touchMode) {
-    hint.textContent = faceSeen ? '' : 'Face not found';
+    hint.textContent = faceSeen ? '' : 'Shoulders not found';
   }
 }
 
@@ -241,11 +287,11 @@ btn.addEventListener('click', async () => {
   if (!ready) {
     btn.disabled = true; btn.textContent = 'Loading…';
     try {
-      msg.textContent = 'Loading face tracker…';
+      msg.textContent = 'Loading pose tracker…';
       detector = await loadDetector();
     } catch (e) {
       console.error(e);
-      msg.textContent = 'Face tracker failed to load. Check your connection and retry.';
+      msg.textContent = 'Pose tracker failed to load. Check your connection and retry.';
       btn.disabled = false; btn.textContent = 'Retry'; return;
     }
     try {
