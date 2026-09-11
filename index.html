@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>Push Day Killer</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; color: #fff; touch-action: none; -webkit-user-select: none; user-select: none; }
+  #stage { position: fixed; inset: 0; }
+  #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); background: #111; }
+  #game { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #ui { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; padding-top: calc(24px + env(safe-area-inset-top)); background: rgba(0,0,0,.55); }
+  #ui.hidden { display: none; }
+  h1 { font-size: 40px; margin: 0 0 8px; letter-spacing: -1px; }
+  p { font-size: 17px; line-height: 1.4; margin: 6px 0; opacity: .9; max-width: 340px; }
+  .big { font-size: 96px; font-weight: 800; margin: 0; line-height: 1; }
+  button { margin-top: 20px; font-size: 20px; font-weight: 700; padding: 16px 36px; border: 0; border-radius: 999px; background: #ffd23f; color: #000; }
+  button:active { transform: scale(.97); }
+  #hud { position: absolute; top: calc(16px + env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font-size: 56px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,.7); pointer-events: none; }
+  #hint { position: absolute; bottom: calc(24px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 15px; text-shadow: 0 1px 4px rgba(0,0,0,.8); pointer-events: none; opacity: .85; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" autoplay muted playsinline></video>
+  <canvas id="game"></canvas>
+  <div id="hud" class="hidden">0</div>
+  <div id="hint" class="hidden"></div>
+  <div id="ui">
+    <h1>Push Day Killer 💀</h1>
+    <p id="msg">Prop your phone on the floor in front of you, screen facing you. Push-ups move the bird. Fly through the gaps.</p>
+    <p id="sub"></p>
+    <button id="btn">Start</button>
+  </div>
+</div>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const video = $('cam'), canvas = $('game'), ctx = canvas.getContext('2d');
+const ui = $('ui'), msg = $('msg'), sub = $('sub'), btn = $('btn'), hud = $('hud'), hint = $('hint');
+
+let W, H, DPR;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize); resize();
+
+// ---------- Face tracking ----------
+let detector = null, faceY = null, faceSeen = false, touchMode = false;
+
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+  video.srcObject = stream;
+  await new Promise(r => video.onloadedmetadata = r);
+  await video.play();
+}
+
+async function loadDetector() {
+  const base = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+  const { FaceDetector, FilesetResolver } = await import(base);
+  const vision = await FilesetResolver.forVisionTasks(base + '/wasm');
+  const model = 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+  for (const delegate of ['GPU', 'CPU']) {
+    try {
+      return await FaceDetector.createFromOptions(vision, { baseOptions: { modelAssetPath: model, delegate }, runningMode: 'VIDEO', minDetectionConfidence: 0.5 });
+    } catch (e) { console.warn('delegate failed', delegate, e); }
+  }
+  throw new Error('Face detector failed to load');
+}
+
+let lastVideoTime = -1;
+function pollFace() {
+  if (!detector || video.readyState < 2) return;
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const res = detector.detectForVideo(video, performance.now());
+  const d = res.detections && res.detections[0];
+  if (d) {
+    const b = d.boundingBox;
+    // Normalised face centre (0 = top of frame, 1 = bottom). Weighted toward the top of the box, which is more stable than the chin.
+    const y = (b.originY + b.height * 0.4) / video.videoHeight;
+    faceY = faceY === null ? y : faceY + (y - faceY) * 0.45;
+    faceSeen = true;
+  } else {
+    faceSeen = false;
+  }
+}
+
+// Touch fallback (no camera): drag finger up/down.
+function enableTouchMode() {
+  touchMode = true; faceSeen = true; faceY = 0.5; topY = 0.1; botY = 0.9;
+  const set = e => { const t = e.touches ? e.touches[0] : e; faceY = Math.min(1, Math.max(0, t.clientY / H)); };
+  ['touchstart', 'touchmove', 'mousedown', 'mousemove'].forEach(ev => window.addEventListener(ev, e => { if (ev.startsWith('mouse') && e.buttons === 0) return; set(e); }, { passive: true }));
+}
+
+// ---------- Calibration ----------
+// topY = face position at the top of a push-up (arms straight), botY = at the bottom.
+let topY = 0.35, botY = 0.75;
+function birdTargetY() {
+  const t = (faceY - topY) / (botY - topY); // 0 at top of push-up, 1 at bottom
+  const clamped = Math.min(1, Math.max(0, t));
+  return H * (0.12 + clamped * 0.76);
+}
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+async function sample(seconds, label) {
+  const vals = [];
+  const end = performance.now() + seconds * 1000;
+  while (performance.now() < end) {
+    const left = Math.ceil((end - performance.now()) / 1000);
+    sub.textContent = `${label} … ${left}`;
+    if (faceY !== null && faceSeen) vals.push(faceY);
+    await wait(100);
+  }
+  vals.sort((a, b) => a - b);
+  return vals.length ? vals[Math.floor(vals.length / 2)] : null;
+}
+
+async function calibrate() {
+  btn.classList.add('hidden');
+  msg.textContent = 'Get into push-up position with your arms straight.';
+  await wait(1500);
+  const t = await sample(3, 'Hold the TOP');
+  msg.textContent = 'Now lower yourself all the way down and hold.';
+  await wait(1500);
+  const b = await sample(3, 'Hold the BOTTOM');
+  sub.textContent = '';
+  if (t === null || b === null || Math.abs(b - t) < 0.05) {
+    msg.textContent = "I couldn't see your face move enough. Make sure your face is in the shot and try again.";
+    btn.textContent = 'Retry'; btn.classList.remove('hidden');
+    return false;
+  }
+  topY = t; botY = b;
+  return true;
+}
+
+// ---------- Game ----------
+const BIRD_X_FRAC = 0.3, BIRD_R = 18;
+const PIPE_W = 70, GAP_FRAC = 0.30, SPEED = 110, SPAWN_EVERY = 2.6;
+let pipes = [], birdY = H / 2, score = 0, best = +(localStorage.getItem('pdk-best') || 0), running = false, spawnT = 0, lastT = 0, dead = false;
+
+function reset() {
+  pipes = []; score = 0; spawnT = 1.2; dead = false;
+  birdY = H / 2;
+  hud.textContent = '0';
+}
+
+function spawnPipe() {
+  const gap = H * GAP_FRAC;
+  const margin = H * 0.14;
+  const gapY = margin + Math.random() * (H - 2 * margin - gap); // top of gap
+  pipes.push({ x: W + PIPE_W, gapY, gap, passed: false });
+}
+
+function update(dt) {
+  pollFace();
+  if (faceY !== null) {
+    const target = birdTargetY();
+    birdY += (target - birdY) * Math.min(1, dt * 10);
+  }
+  if (dead) return;
+  spawnT -= dt;
+  if (spawnT <= 0) { spawnPipe(); spawnT = SPAWN_EVERY; }
+  const bx = W * BIRD_X_FRAC;
+  for (const p of pipes) {
+    p.x -= SPEED * dt;
+    if (!p.passed && p.x + PIPE_W < bx) { p.passed = true; score++; hud.textContent = score; }
+    // collision: circle vs the two pipe rects
+    const inX = bx + BIRD_R > p.x && bx - BIRD_R < p.x + PIPE_W;
+    if (inX && (birdY - BIRD_R < p.gapY || birdY + BIRD_R > p.gapY + p.gap)) die();
+  }
+  pipes = pipes.filter(p => p.x + PIPE_W > -10);
+}
+
+function die() {
+  dead = true; running = false;
+  best = Math.max(best, score); localStorage.setItem('pdk-best', best);
+  msg.innerHTML = `<span class="big">${score}</span><br>pipes cleared`;
+  sub.textContent = `Best: ${best}`;
+  btn.textContent = 'Play again'; btn.classList.remove('hidden');
+  ui.classList.remove('hidden'); hint.classList.add('hidden');
+  if (navigator.vibrate) navigator.vibrate(200);
+}
+
+function drawPipe(x, y, h) {
+  const g = ctx.createLinearGradient(x, 0, x + PIPE_W, 0);
+  g.addColorStop(0, '#c97a4a'); g.addColorStop(0.35, '#f0a978'); g.addColorStop(0.7, '#d9855a'); g.addColorStop(1, '#9c5a34');
+  ctx.fillStyle = g; ctx.fillRect(x, y, PIPE_W, h);
+  ctx.strokeStyle = 'rgba(60,30,10,.7)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, PIPE_W, h);
+}
+
+function drawBird(x, y) {
+  ctx.save(); ctx.translate(x, y);
+  const t = (faceY !== null ? (birdTargetY() - birdY) : 0);
+  ctx.rotate(Math.max(-0.5, Math.min(0.5, t / 120)));
+  // body
+  ctx.fillStyle = '#f5d442'; ctx.beginPath(); ctx.ellipse(0, 0, BIRD_R + 2, BIRD_R, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#3a2a00'; ctx.lineWidth = 2; ctx.stroke();
+  // wing
+  ctx.fillStyle = '#f0a020'; ctx.beginPath(); ctx.ellipse(-6, 4, 10, 6, -0.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // eye
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(8, -6, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(10, -6, 3, 0, Math.PI * 2); ctx.fill();
+  // beak
+  ctx.fillStyle = '#e8562a'; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(28, 4); ctx.lineTo(14, 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  for (const p of pipes) {
+    drawPipe(p.x, -10, p.gapY + 10);
+    drawPipe(p.x, p.gapY + p.gap, H - p.gapY - p.gap + 10);
+    // caps
+    drawPipe(p.x - 6, p.gapY - 26, 26); drawPipe(p.x - 6, p.gapY + p.gap, 26);
+  }
+  drawBird(W * BIRD_X_FRAC, birdY);
+  if (running && !touchMode) {
+    hint.textContent = faceSeen ? '' : 'Face not found';
+  }
+}
+
+function loop(t) {
+  const dt = Math.min(0.05, (t - lastT) / 1000 || 0); lastT = t;
+  if (running) update(dt); else pollFace();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ---------- Flow ----------
+let ready = false;
+btn.addEventListener('click', async () => {
+  if (!ready) {
+    btn.disabled = true; btn.textContent = 'Loading…';
+    try {
+      msg.textContent = 'Loading face tracker…';
+      detector = await loadDetector();
+    } catch (e) {
+      console.error(e);
+      msg.textContent = 'Face tracker failed to load. Check your connection and retry.';
+      btn.disabled = false; btn.textContent = 'Retry'; return;
+    }
+    try {
+      msg.textContent = 'Starting camera…';
+      await startCamera();
+      ready = true;
+    } catch (e) {
+      console.error(e);
+      msg.textContent = 'Camera not available. Touch mode: drag your finger up and down to fly.';
+      enableTouchMode(); ready = true;
+    }
+    btn.disabled = false;
+    if (!touchMode) {
+      const ok = await calibrate();
+      if (!ok) { ready = false; return; }
+    }
+  } else if (!touchMode && btn.textContent === 'Retry') {
+    const ok = await calibrate();
+    if (!ok) return;
+  }
+  // countdown
+  btn.classList.add('hidden');
+  for (const n of ['3', '2', '1', 'GO']) { msg.innerHTML = `<span class="big">${n}</span>`; sub.textContent = ''; await wait(700); }
+  reset();
+  ui.classList.add('hidden'); hud.classList.remove('hidden'); hint.classList.remove('hidden');
+  running = true;
+});
+
+window.__pdk = { get pipes() { return pipes; }, get birdY() { return birdY; } }; // debug hook
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
