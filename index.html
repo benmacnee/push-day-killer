@@ -359,7 +359,7 @@ async function solo() {
 
 async function twoPlayer() {
   showUI('How many lives each?');
-  const lives = await choose([{ label: '1', value: 1 }, { label: '3', value: 3 }, { label: '5', value: 5 }]);
+  const lives = await choose([{ label: '3', value: 3 }, { label: '5', value: 5 }, { label: '7', value: 7 }]);
   const players = [{ name: 'Player 1', cal: null, score: 0 }, { name: 'Player 2', cal: null, score: 0 }];
   for (const p of players) {
     showUI(`${p.name}: get in position in front of the camera.`);
