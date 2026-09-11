@@ -144,7 +144,7 @@ async function calibrate() {
 
 // ---------- Game ----------
 const BIRD_X_FRAC = 0.3, BIRD_R = 26;
-const PIPE_W = 70, GAP_FRAC = 0.30, SPEED = 137.5, SPAWN_EVERY = 2.1;
+const PIPE_W = 64, GAP_FRAC = 0.30, SPEED = 175, SPAWN_EVERY = 1.7;
 let trail = [], trailT = 0;
 let pipes = [], birdY = H / 2, score = 0, best = +(localStorage.getItem('pdk-best') || 0), running = false, spawnT = 0, lastT = 0, dead = false;
 
@@ -196,11 +196,48 @@ function die() {
   if (navigator.vibrate) navigator.vibrate(200);
 }
 
-function drawPipe(x, y, h) {
-  const g = ctx.createLinearGradient(x, 0, x + PIPE_W, 0);
-  g.addColorStop(0, '#c97a4a'); g.addColorStop(0.35, '#f0a978'); g.addColorStop(0.7, '#d9855a'); g.addColorStop(1, '#9c5a34');
-  ctx.fillStyle = g; ctx.fillRect(x, y, PIPE_W, h);
-  ctx.strokeStyle = 'rgba(60,30,10,.7)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, PIPE_W, h);
+// Top obstacle: a zeppelin moored under a storm-cloud column. Its gondola bottom sits on the gap edge.
+function drawZeppelin(x, gapY) {
+  const cx = x + PIPE_W / 2;
+  // cloud column from the sky down to the airship
+  ctx.fillStyle = '#5d6672'; ctx.strokeStyle = '#2f3540'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.rect(cx - PIPE_W * 0.32, -20, PIPE_W * 0.64, gapY - 44 + 20); ctx.fill();
+  for (let y = 4; y < gapY - 40; y += 30) {
+    const r = 16 + ((y / 30) % 2) * 6;
+    ctx.beginPath(); ctx.arc(cx - 14, y, r, 0, Math.PI * 2); ctx.arc(cx + 14, y + 12, r - 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  // mooring cable
+  ctx.strokeStyle = '#2f3540'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, gapY - 60); ctx.lineTo(cx, gapY - 34); ctx.stroke();
+  // envelope
+  const bw = PIPE_W * 0.9, bh = 15, by = gapY - 24;
+  ctx.fillStyle = '#c9c2b5'; ctx.strokeStyle = '#4a4238'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.ellipse(cx, by, bw, bh, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(74,66,56,.35)'; ctx.lineWidth = 1.5;
+  for (const dx of [-bw * 0.5, 0, bw * 0.5]) { ctx.beginPath(); ctx.moveTo(cx + dx, by - bh + 1); ctx.lineTo(cx + dx, by + bh - 1); ctx.stroke(); }
+  // tail fins
+  ctx.fillStyle = '#b8402f'; ctx.strokeStyle = '#4a4238'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(cx - bw + 8, by - 2); ctx.lineTo(cx - bw - 4, by - 14); ctx.lineTo(cx - bw + 16, by - 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - bw + 8, by + 2); ctx.lineTo(cx - bw - 4, by + 14); ctx.lineTo(cx - bw + 16, by + 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // gondola
+  ctx.fillStyle = '#4a4238'; ctx.beginPath(); ctx.roundRect(cx - 16, gapY - 10, 32, 10, 3); ctx.fill();
+  ctx.fillStyle = '#ffd97a'; for (const dx of [-10, -3, 4]) ctx.fillRect(cx + dx, gapY - 8, 4, 4);
+}
+
+// Bottom obstacle: a skyscraper rising from the floor. Its roof sits on the gap edge.
+function drawSkyscraper(x, topY) {
+  const w = PIPE_W, h = H + 20 - topY;
+  ctx.fillStyle = '#3b4552'; ctx.strokeStyle = '#1e242c'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.rect(x, topY, w, h); ctx.fill(); ctx.stroke();
+  // roof ledge
+  ctx.fillStyle = '#2b333d'; ctx.fillRect(x - 4, topY, w + 8, 7); ctx.strokeRect(x - 4, topY, w + 8, 7);
+  // lit windows
+  for (let wy = topY + 16; wy < H; wy += 18) {
+    for (let wx = x + 8; wx < x + w - 8; wx += 14) {
+      const lit = ((wx * 7 + wy * 13) % 5) !== 0;
+      ctx.fillStyle = lit ? '#ffe08a' : '#556170';
+      ctx.fillRect(wx, wy, 8, 10);
+    }
+  }
 }
 
 function drawTrail() {
@@ -262,10 +299,8 @@ function drawPlane(x, y, t) {
 function draw() {
   ctx.clearRect(0, 0, W, H);
   for (const p of pipes) {
-    drawPipe(p.x, -10, p.gapY + 10);
-    drawPipe(p.x, p.gapY + p.gap, H - p.gapY - p.gap + 10);
-    // caps
-    drawPipe(p.x - 6, p.gapY - 26, 26); drawPipe(p.x - 6, p.gapY + p.gap, 26);
+    drawZeppelin(p.x, p.gapY);
+    drawSkyscraper(p.x, p.gapY + p.gap);
   }
   drawTrail();
   drawPlane(W * BIRD_X_FRAC, birdY, performance.now() / 1000);
