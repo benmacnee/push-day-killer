@@ -33,7 +33,7 @@
   <div id="hint" class="hidden"></div>
   <div id="ui">
     <h1>Push Day Killer 💀</h1>
-    <p id="msg">Prop your phone on the floor in front of you, screen facing you, so it can see your shoulders. Push-ups fly the plane. Get through the gaps.</p>
+    <p id="msg">Prop your phone on the floor in front of you, screen facing you, so it can see your shoulders. Push-ups steer the diver. Squeeze through the cave.</p>
     <p id="sub"></p>
     <button id="btn">Start</button>
   </div>
@@ -143,7 +143,7 @@ async function calibrate() {
 }
 
 // ---------- Game ----------
-const BIRD_X_FRAC = 0.3, BIRD_R = 26;
+const BIRD_X_FRAC = 0.3, BIRD_R = 16, HIT_OFFSETS = [-40, 0, 40, 72]; // hit circles along the diver + scooter
 const PIPE_W = 64, GAP_FRAC = 0.30, SPEED = 175, SPAWN_EVERY = 1.7;
 let trail = [], trailT = 0;
 let pipes = [], birdY = H / 2, score = 0, best = +(localStorage.getItem('pdk-best') || 0), running = false, spawnT = 0, lastT = 0, dead = false;
@@ -169,8 +169,8 @@ function update(dt) {
   }
   // smoke trail: puffs drop off the tail and drift left with the pipes, tracing where you've been
   trailT -= dt;
-  if (trailT <= 0) { trail.push({ x: W * BIRD_X_FRAC - 30, y: birdY + 2, age: 0, r: 4 + Math.random() * 3 }); trailT = 0.05; }
-  for (const s of trail) { s.x -= SPEED * dt; s.age += dt; s.y -= 6 * dt; }
+  if (trailT <= 0) { trail.push({ x: W * BIRD_X_FRAC - 4, y: birdY - 4, age: 0, r: 2 + Math.random() * 3, drift: (Math.random() - 0.5) * 20 }); trailT = 0.06; }
+  for (const s of trail) { s.x -= SPEED * dt; s.age += dt; s.y -= 28 * dt; s.x += s.drift * dt; }
   trail = trail.filter(s => s.age < 3.5 && s.x > -20);
   if (dead) return;
   spawnT -= dt;
@@ -179,9 +179,12 @@ function update(dt) {
   for (const p of pipes) {
     p.x -= SPEED * dt;
     if (!p.passed && p.x + PIPE_W < bx) { p.passed = true; score++; hud.textContent = score; }
-    // collision: circle vs the two pipe rects
-    const inX = bx + BIRD_R > p.x && bx - BIRD_R < p.x + PIPE_W;
-    if (inX && (birdY - BIRD_R < p.gapY || birdY + BIRD_R > p.gapY + p.gap)) die();
+    // collision: hit circles along the diver vs the two rock columns
+    for (const off of HIT_OFFSETS) {
+      const cx = bx + off;
+      const inX = cx + BIRD_R > p.x && cx - BIRD_R < p.x + PIPE_W;
+      if (inX && (birdY - BIRD_R < p.gapY || birdY + BIRD_R > p.gapY + p.gap)) { die(); break; }
+    }
   }
   pipes = pipes.filter(p => p.x + PIPE_W > -10);
 }
@@ -196,111 +199,97 @@ function die() {
   if (navigator.vibrate) navigator.vibrate(200);
 }
 
-// Top obstacle: a zeppelin moored under a storm-cloud column. Its gondola bottom sits on the gap edge.
-function drawZeppelin(x, gapY) {
-  const cx = x + PIPE_W / 2;
-  // cloud column from the sky down to the airship
-  ctx.fillStyle = '#5d6672'; ctx.strokeStyle = '#2f3540'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.rect(cx - PIPE_W * 0.32, -20, PIPE_W * 0.64, gapY - 44 + 20); ctx.fill();
-  for (let y = 4; y < gapY - 40; y += 30) {
-    const r = 16 + ((y / 30) % 2) * 6;
-    ctx.beginPath(); ctx.arc(cx - 14, y, r, 0, Math.PI * 2); ctx.arc(cx + 14, y + 12, r - 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  }
-  // mooring cable
-  ctx.strokeStyle = '#2f3540'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx, gapY - 60); ctx.lineTo(cx, gapY - 34); ctx.stroke();
-  // envelope
-  const bw = PIPE_W * 0.9, bh = 15, by = gapY - 24;
-  ctx.fillStyle = '#c9c2b5'; ctx.strokeStyle = '#4a4238'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.ellipse(cx, by, bw, bh, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = 'rgba(74,66,56,.35)'; ctx.lineWidth = 1.5;
-  for (const dx of [-bw * 0.5, 0, bw * 0.5]) { ctx.beginPath(); ctx.moveTo(cx + dx, by - bh + 1); ctx.lineTo(cx + dx, by + bh - 1); ctx.stroke(); }
-  // tail fins
-  ctx.fillStyle = '#b8402f'; ctx.strokeStyle = '#4a4238'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(cx - bw + 8, by - 2); ctx.lineTo(cx - bw - 4, by - 14); ctx.lineTo(cx - bw + 16, by - 6); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(cx - bw + 8, by + 2); ctx.lineTo(cx - bw - 4, by + 14); ctx.lineTo(cx - bw + 16, by + 6); ctx.closePath(); ctx.fill(); ctx.stroke();
-  // gondola
-  ctx.fillStyle = '#4a4238'; ctx.beginPath(); ctx.roundRect(cx - 16, gapY - 10, 32, 10, 3); ctx.fill();
-  ctx.fillStyle = '#ffd97a'; for (const dx of [-10, -3, 4]) ctx.fillRect(cx + dx, gapY - 8, 4, 4);
-}
-
-// Bottom obstacle: a skyscraper rising from the floor. Its roof sits on the gap edge.
-function drawSkyscraper(x, topY) {
-  const w = PIPE_W, h = H + 20 - topY;
-  ctx.fillStyle = '#3b4552'; ctx.strokeStyle = '#1e242c'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.rect(x, topY, w, h); ctx.fill(); ctx.stroke();
-  // roof ledge
-  ctx.fillStyle = '#2b333d'; ctx.fillRect(x - 4, topY, w + 8, 7); ctx.strokeRect(x - 4, topY, w + 8, 7);
-  // lit windows
-  for (let wy = topY + 16; wy < H; wy += 18) {
-    for (let wx = x + 8; wx < x + w - 8; wx += 14) {
-      const lit = ((wx * 7 + wy * 13) % 5) !== 0;
-      ctx.fillStyle = lit ? '#ffe08a' : '#556170';
-      ctx.fillRect(wx, wy, 8, 10);
-    }
-  }
+// Jagged rock spike. dir = 1 hangs from the ceiling (tip at tipY), dir = -1 rises from the floor.
+function drawSpike(x, baseY, tipY, dir) {
+  const cx = x + PIPE_W / 2, half = PIPE_W / 2 + 4;
+  const len = Math.abs(tipY - baseY);
+  ctx.fillStyle = '#6b5744'; ctx.strokeStyle = '#2e2419'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  // main spike with two shoulders, deterministic wobble so the rocks look rough but don't flicker
+  const wob = i => Math.sin(i * 12.9898 + x * 0.01) * 4;
+  ctx.beginPath();
+  ctx.moveTo(cx - half, baseY);
+  ctx.lineTo(cx - half + wob(1), baseY + dir * len * 0.45);
+  ctx.lineTo(cx - half * 0.55, baseY + dir * len * 0.62);
+  ctx.lineTo(cx - half * 0.35 + wob(2), baseY + dir * len * 0.82);
+  ctx.lineTo(cx, tipY);
+  ctx.lineTo(cx + half * 0.3 + wob(3), baseY + dir * len * 0.8);
+  ctx.lineTo(cx + half * 0.55, baseY + dir * len * 0.6);
+  ctx.lineTo(cx + half + wob(4), baseY + dir * len * 0.4);
+  ctx.lineTo(cx + half, baseY);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // highlight stripe
+  ctx.strokeStyle = 'rgba(255,230,200,.18)'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.moveTo(cx - half * 0.35, baseY); ctx.lineTo(cx - 3, baseY + dir * len * 0.85); ctx.stroke();
 }
 
 function drawTrail() {
   for (const s of trail) {
     const a = Math.max(0, 1 - s.age / 3.5);
-    ctx.fillStyle = `rgba(245,245,245,${(0.55 * a).toFixed(3)})`;
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.r + s.age * 4, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(220,245,255,${(0.8 * a).toFixed(3)})`; ctx.lineWidth = 1.5;
+    ctx.fillStyle = `rgba(200,235,255,${(0.25 * a).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r + s.age * 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = `rgba(255,255,255,${(0.7 * a).toFixed(3)})`;
+    ctx.beginPath(); ctx.arc(s.x - s.r * 0.35, s.y - s.r * 0.35, 1.5, 0, Math.PI * 2); ctx.fill();
   }
 }
 
+// Scuba dog towed by a sea scooter (diver propulsion vehicle). Faces right.
 function drawPlane(x, y, t) {
   ctx.save(); ctx.translate(x, y);
   const v = (faceY !== null ? (birdTargetY() - birdY) : 0);
-  ctx.rotate(Math.max(-0.4, Math.min(0.4, v / 150)));
+  ctx.rotate(Math.max(-0.35, Math.min(0.35, v / 150)));
   ctx.scale(1.3, 1.3);
-  ctx.lineWidth = 2; ctx.strokeStyle = '#3a2410'; ctx.lineJoin = 'round';
+  ctx.lineWidth = 2; ctx.strokeStyle = '#2a1c10'; ctx.lineJoin = 'round';
   const rr = (px, py, w, h, r) => { ctx.beginPath(); ctx.roundRect(px, py, w, h, r); ctx.fill(); ctx.stroke(); };
-  // lower wing
-  ctx.fillStyle = '#f2d16b'; rr(-24, 6, 40, 7, 3);
-  // tail fin + tailplane
-  ctx.fillStyle = '#d9342b';
-  ctx.beginPath(); ctx.moveTo(-30, 0); ctx.lineTo(-30, -16); ctx.lineTo(-20, -4); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#f2d16b'; rr(-36, -2, 16, 5, 2);
-  // fuselage
-  ctx.fillStyle = '#d9342b'; rr(-32, -6, 58, 14, 7);
-  // cockpit opening
-  ctx.fillStyle = '#7a1f16'; ctx.beginPath(); ctx.ellipse(-4, -5, 11, 4, 0, 0, Math.PI * 2); ctx.fill();
-  // wheels
-  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(-8, 15, 4, 0, Math.PI * 2); ctx.arc(8, 15, 4, 0, Math.PI * 2); ctx.fill();
-  // --- dog pilot ---
-  ctx.fillStyle = '#c4884a';
-  // ears (floppy, streaming back)
-  ctx.beginPath(); ctx.ellipse(-14, -18, 5, 9, 0.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  const kick = Math.sin(t * 6) * 3;
+  // fins (trailing back legs)
+  ctx.fillStyle = '#2f80ed';
+  ctx.beginPath(); ctx.moveTo(-32, -2 + kick); ctx.lineTo(-52, -8 + kick * 1.5); ctx.lineTo(-50, 2 + kick); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-32, 6 - kick); ctx.lineTo(-52, 4 - kick * 1.5); ctx.lineTo(-50, 14 - kick); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // tank on the back
+  ctx.fillStyle = '#c9ced4'; rr(-30, -18, 22, 9, 4);
+  ctx.strokeStyle = '#2a1c10'; ctx.beginPath(); ctx.moveTo(-9, -14); ctx.quadraticCurveTo(4, -16, 6, -4); ctx.stroke(); // air hose
+  // body
+  ctx.fillStyle = '#c4884a'; rr(-36, -8, 34, 16, 8);
+  // tail
+  ctx.beginPath(); ctx.moveTo(-36, -2); ctx.quadraticCurveTo(-46, -12 + kick, -40, -16 + kick); ctx.lineWidth = 4; ctx.strokeStyle = '#c4884a'; ctx.stroke();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#2a1c10';
+  // ear
+  ctx.fillStyle = '#a86f38'; ctx.beginPath(); ctx.ellipse(-12, -8, 5, 8, -0.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   // head
-  ctx.beginPath(); ctx.arc(-4, -20, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  // snout
-  ctx.fillStyle = '#e9c69a'; ctx.beginPath(); ctx.ellipse(3, -17, 6, 4.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(7, -18, 2.2, 0, Math.PI * 2); ctx.fill();
-  // goggles
-  ctx.fillStyle = 'rgba(160,220,255,.85)';
-  ctx.beginPath(); ctx.arc(-7, -23, 3.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.beginPath(); ctx.arc(0, -23, 3.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(-6, -23, 1.3, 0, Math.PI * 2); ctx.arc(1, -23, 1.3, 0, Math.PI * 2); ctx.fill();
-  // scarf
-  ctx.strokeStyle = '#2f80ed'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(-10, -8); ctx.quadraticCurveTo(-20, -6 + Math.sin(t * 20) * 2, -28, -10 + Math.sin(t * 20 + 1) * 3); ctx.stroke();
-  ctx.strokeStyle = '#3a2410'; ctx.lineWidth = 2;
-  // upper wing + struts (drawn last so it sits in front of the pilot's chin)
-  ctx.beginPath(); ctx.moveTo(-14, -30); ctx.lineTo(-14, 6); ctx.moveTo(8, -30); ctx.lineTo(8, 6); ctx.stroke();
-  ctx.fillStyle = '#f2d16b'; rr(-24, -34, 42, 7, 3);
-  // propeller
-  ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(27, 1, 3, 0, Math.PI * 2); ctx.fill();
-  ctx.save(); ctx.translate(27, 1); ctx.rotate(t * 40);
-  ctx.fillStyle = 'rgba(80,80,80,.8)'; ctx.beginPath(); ctx.ellipse(0, 0, 2.5, 16, 0, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
+  ctx.fillStyle = '#c4884a'; ctx.beginPath(); ctx.arc(-2, -4, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // snout + nose
+  ctx.fillStyle = '#e9c69a'; ctx.beginPath(); ctx.ellipse(6, 0, 6, 4.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(10, -1, 2.2, 0, Math.PI * 2); ctx.fill();
+  // dive mask
+  ctx.fillStyle = 'rgba(150,220,255,.85)'; rr(-9, -11, 16, 9, 3);
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(-4, -7, 1.5, 0, Math.PI * 2); ctx.arc(3, -7, 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-9, -8); ctx.quadraticCurveTo(-14, -6, -12, -2); ctx.stroke();
+  ctx.strokeStyle = '#2a1c10';
+  // regulator
+  ctx.fillStyle = '#333'; ctx.beginPath(); ctx.arc(5, 4, 3, 0, Math.PI * 2); ctx.fill();
+  // front paws gripping the handles
+  ctx.fillStyle = '#c4884a';
+  ctx.beginPath(); ctx.arc(14, -8, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(14, 9, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // --- sea scooter ---
+  ctx.fillStyle = '#333'; ctx.beginPath(); ctx.moveTo(14, -8); ctx.lineTo(20, -8); ctx.moveTo(14, 9); ctx.lineTo(20, 9); ctx.lineWidth = 3; ctx.stroke(); ctx.lineWidth = 2;
+  // prop shroud (behind the body, spinning blur inside)
+  ctx.fillStyle = '#2b2b2b'; rr(16, -12, 8, 24, 3);
+  ctx.save(); ctx.translate(20, 0); ctx.rotate(t * 30); ctx.fillStyle = 'rgba(120,200,255,.6)'; ctx.beginPath(); ctx.ellipse(0, 0, 2, 9, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+  // body
+  ctx.fillStyle = '#f5c400'; rr(22, -9, 32, 18, 8);
+  ctx.fillStyle = '#2b2b2b'; ctx.beginPath(); ctx.moveTo(52, -8); ctx.quadraticCurveTo(64, 0, 52, 8); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.fillRect(28, -4, 16, 3); // grip stripe
   ctx.restore();
 }
 
 function draw() {
   ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(10,70,110,.42)'; ctx.fillRect(0, 0, W, H);
   for (const p of pipes) {
-    drawZeppelin(p.x, p.gapY);
-    drawSkyscraper(p.x, p.gapY + p.gap);
+    drawSpike(p.x, -20, p.gapY, 1);
+    drawSpike(p.x, H + 20, p.gapY + p.gap, -1);
   }
   drawTrail();
   drawPlane(W * BIRD_X_FRAC, birdY, performance.now() / 1000);
