@@ -38,7 +38,7 @@
   <div id="hint" class="hidden"></div>
   <div id="ui">
     <h1>Push Day Killer 💀</h1>
-    <p id="msg">Prop your phone on the floor in front of you, screen facing you, so it can see your shoulders. Push-ups steer the diver. Squeeze through the cave.</p>
+    <p id="msg">Push-ups or squats steer the diver. Squeeze through the cave.</p>
     <p id="sub"></p>
     <div id="opts"></div>
     <button id="btn">Start</button>
@@ -61,6 +61,13 @@ window.addEventListener('resize', resize); resize();
 
 // ---------- Face tracking ----------
 let detector = null, faceY = null, faceSeen = false, touchMode = false;
+// Which body part drives the diver. Push-ups track the shoulders (11, 12); squats track the hips (23, 24),
+// so bending forward at the waist doesn't count as going down.
+const EXERCISES = {
+  pushup: { idx: [11, 12], part: 'shoulders', setup: 'Prop your phone on the floor in front of you, screen facing you, so it can see your head and shoulders.', top: 'get into push-up position with your arms straight.', bottom: 'Now lower yourself all the way down and hold.' },
+  squat:  { idx: [23, 24], part: 'hips', setup: 'Lean your phone against a wall and stand back so the camera sees you from head to knees.', top: 'stand tall, feet shoulder-width apart.', bottom: 'Now squat all the way down and hold.' },
+};
+let exercise = EXERCISES.pushup;
 
 async function startCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
@@ -89,8 +96,7 @@ function pollFace() {
   lastVideoTime = video.currentTime;
   const res = detector.detectForVideo(video, performance.now());
   const lm = res.landmarks && res.landmarks[0];
-  // Landmarks 11 and 12 are the shoulders. Tracking them (not the head) means nodding doesn't count.
-  const l = lm && lm[11], r = lm && lm[12];
+  const l = lm && lm[exercise.idx[0]], r = lm && lm[exercise.idx[1]];
   if (l && r && (l.visibility ?? 1) > 0.4 && (r.visibility ?? 1) > 0.4) {
     const y = (l.y + r.y) / 2; // normalised, 0 = top of frame
     faceY = faceY === null ? y : faceY + (y - faceY) * 0.45;
@@ -132,10 +138,11 @@ async function sample(seconds, label) {
 
 async function calibrate(name) {
   btn.classList.add('hidden');
-  msg.textContent = `${name}: get into push-up position with your arms straight.`;
+  msg.textContent = `${name}: ${exercise.top}`;
+  sub.textContent = '';
   await wait(1500);
   const t = await sample(3, 'Hold the TOP');
-  msg.textContent = 'Now lower yourself all the way down and hold.';
+  msg.textContent = exercise.bottom;
   await wait(1500);
   const b = await sample(3, 'Hold the BOTTOM');
   sub.textContent = '';
@@ -292,7 +299,7 @@ function draw() {
   drawTrail();
   drawPlane(W * BIRD_X_FRAC, birdY, performance.now() / 1000);
   if (running && !touchMode) {
-    hint.textContent = faceSeen ? '' : 'Shoulders not found';
+    hint.textContent = faceSeen ? '' : `${exercise.part[0].toUpperCase() + exercise.part.slice(1)} not found`;
   }
 }
 
@@ -328,7 +335,7 @@ async function calibratePlayer(name) {
   for (;;) {
     const cal = await calibrate(name);
     if (cal) return cal;
-    showUI("I couldn't see your shoulders move enough. Make sure your head and shoulders are in the shot and try again.");
+    showUI(`I couldn't see your ${exercise.part} move enough. ${exercise.setup} Then try again.`);
     await tap('Retry');
   }
 }
@@ -406,7 +413,10 @@ async function main() {
     showUI('Camera not available. Touch mode: drag your finger up and down to swim.');
     enableTouchMode();
   }
-  showUI('Who\'s playing?');
+  showUI('Which exercise?');
+  const ex = await choose([{ label: 'Push-ups', value: 'pushup' }, { label: 'Squats', value: 'squat', alt: true }]);
+  exercise = EXERCISES[ex];
+  showUI(exercise.setup, 'Who\'s playing?');
   const mode = await choose([{ label: 'Solo', value: 'solo' }, { label: '2 Player', value: 'duo', alt: true }]);
   if (mode === 'solo') await solo(); else await twoPlayer();
 }
