@@ -9,23 +9,25 @@
 <title>Push Day Killer</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, system-ui, sans-serif; color: #fff; touch-action: none; -webkit-user-select: none; user-select: none; }
+  html, body { margin: 0; height: 100%; background: linear-gradient(#bdeeff, #4fb8dc); overflow: hidden; font-family: -apple-system, system-ui, sans-serif; color: #111; touch-action: none; -webkit-user-select: none; user-select: none; }
   #stage { position: fixed; inset: 0; }
-  #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); background: #111; }
+  #cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: .4; }
   #game { position: absolute; inset: 0; width: 100%; height: 100%; }
-  #ui { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; padding-top: calc(24px + env(safe-area-inset-top)); background: rgba(0,0,0,.55); }
+  #ui { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; padding-top: calc(24px + env(safe-area-inset-top)); background: rgba(255,255,255,.92); color: #111; }
   #ui.hidden { display: none; }
   h1 { font-size: 40px; margin: 0 0 8px; letter-spacing: -1px; }
-  p { font-size: 17px; line-height: 1.4; margin: 6px 0; opacity: .9; max-width: 340px; }
+  p { font-size: 20px; font-weight: 600; line-height: 1.35; margin: 6px 0; max-width: 340px; }
   .big { font-size: 96px; font-weight: 800; margin: 0; line-height: 1; }
-  button { margin-top: 20px; font-size: 20px; font-weight: 700; padding: 16px 36px; border: 0; border-radius: 999px; background: #ffd23f; color: #000; }
+  button { margin-top: 20px; font-size: 22px; font-weight: 800; padding: 18px 38px; border: 3px solid #111; border-radius: 999px; background: #ffd23f; color: #111; }
   button:active { transform: scale(.97); }
-  #hud { position: absolute; top: calc(16px + env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font-size: 56px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,.7); pointer-events: none; }
-  #hint { position: absolute; bottom: calc(24px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 15px; text-shadow: 0 1px 4px rgba(0,0,0,.8); pointer-events: none; opacity: .85; }
-  #who { position: absolute; top: calc(22px + env(safe-area-inset-top)); left: 16px; font-size: 15px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,.8); pointer-events: none; opacity: .9; }
+  #hud { position: absolute; top: calc(12px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); font-size: 56px; font-weight: 900; line-height: 1; padding: 6px 22px; border-radius: 999px; background: rgba(255,255,255,.9); color: #111; border: 3px solid #111; pointer-events: none; }
+  #hint { position: absolute; bottom: calc(24px + env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 18px; font-weight: 800; color: #fff; text-shadow: 0 0 6px #000, 0 0 2px #000; pointer-events: none; }
+  #who { position: absolute; top: calc(18px + env(safe-area-inset-top)); left: 12px; font-size: 15px; font-weight: 800; padding: 6px 12px; border-radius: 999px; background: rgba(255,255,255,.9); color: #111; border: 2px solid #111; pointer-events: none; }
   #opts { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 16px; }
   #opts button { margin: 0; }
-  #opts button.alt { background: #fff; }
+  #opts button.alt { background: #111; color: #fff; }
+  .arrow { font-size: 120px; line-height: 1; font-weight: 900; }
+  .arrow.up { color: #1a9e3f; } .arrow.down { color: #d9342b; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -123,12 +125,13 @@ function birdTargetY() {
 }
 
 function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
-async function sample(seconds, label) {
+async function sample(seconds, arrowHtml, text) {
   const vals = [];
   const end = performance.now() + seconds * 1000;
   while (performance.now() < end) {
     const left = Math.ceil((end - performance.now()) / 1000);
-    sub.textContent = `${label} … ${left}`;
+    msg.innerHTML = `${arrowHtml}<br>${text}`;
+    sub.innerHTML = `<span class="big">${left}</span>`;
     if (faceY !== null && faceSeen) vals.push(faceY);
     await wait(100);
   }
@@ -138,13 +141,13 @@ async function sample(seconds, label) {
 
 async function calibrate(name) {
   btn.classList.add('hidden');
-  msg.textContent = `${name}: ${exercise.top}`;
-  sub.textContent = '';
-  await wait(1500);
-  const t = await sample(3, 'Hold the TOP');
-  msg.textContent = exercise.bottom;
-  await wait(1500);
-  const b = await sample(3, 'Hold the BOTTOM');
+  const UP = '<span class="arrow up">▲</span>', DOWN = '<span class="arrow down">▼</span>';
+  msg.innerHTML = `${UP}<br>${name}: ${exercise.top}`; sub.textContent = '';
+  await wait(2000);
+  const t = await sample(3, UP, 'Hold the <b>TOP</b>');
+  msg.innerHTML = `${DOWN}<br>${exercise.bottom}`; sub.textContent = '';
+  await wait(2000);
+  const b = await sample(3, DOWN, 'Hold the <b>BOTTOM</b>');
   sub.textContent = '';
   if (t === null || b === null || Math.abs(b - t) < 0.05) return null;
   return { top: t, bot: b };
@@ -211,7 +214,7 @@ function die() {
 function drawSpike(x, baseY, tipY, dir) {
   const cx = x + PIPE_W / 2, half = PIPE_W / 2 + 4;
   const len = Math.abs(tipY - baseY);
-  ctx.fillStyle = '#6b5744'; ctx.strokeStyle = '#2e2419'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  ctx.fillStyle = '#9c6b3f'; ctx.strokeStyle = '#1e1208'; ctx.lineWidth = 5; ctx.lineJoin = 'round';
   // main spike with two shoulders, deterministic wobble so the rocks look rough but don't flicker
   const wob = i => Math.sin(i * 12.9898 + x * 0.01) * 4;
   ctx.beginPath();
@@ -226,14 +229,14 @@ function drawSpike(x, baseY, tipY, dir) {
   ctx.lineTo(cx + half, baseY);
   ctx.closePath(); ctx.fill(); ctx.stroke();
   // highlight stripe
-  ctx.strokeStyle = 'rgba(255,230,200,.18)'; ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(255,230,200,.35)'; ctx.lineWidth = 6;
   ctx.beginPath(); ctx.moveTo(cx - half * 0.35, baseY); ctx.lineTo(cx - 3, baseY + dir * len * 0.85); ctx.stroke();
 }
 
 function drawTrail() {
   for (const s of trail) {
     const a = Math.max(0, 1 - s.age / 3.5);
-    ctx.strokeStyle = `rgba(220,245,255,${(0.8 * a).toFixed(3)})`; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = `rgba(20,60,90,${(0.8 * a).toFixed(3)})`; ctx.lineWidth = 1.5;
     ctx.fillStyle = `rgba(200,235,255,${(0.25 * a).toFixed(3)})`;
     ctx.beginPath(); ctx.arc(s.x, s.y, s.r + s.age * 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     ctx.fillStyle = `rgba(255,255,255,${(0.7 * a).toFixed(3)})`;
@@ -294,7 +297,7 @@ function drawPlane(x, y, t) {
 
 function draw() {
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(10,70,110,.42)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(140,225,255,.28)'; ctx.fillRect(0, 0, W, H);
   for (const p of pipes) {
     drawSpike(p.x, -20, p.gapY, 1);
     drawSpike(p.x, H + 20, p.gapY + p.gap, -1);
@@ -362,9 +365,16 @@ async function playRun(cal, label, { swapText = '', target = 0, base = 0 } = {})
 }
 
 async function solo() {
-  const cal = await calibratePlayer('You');
   showUI('One run, or keep going with rests?');
   const kind = await choose([{ label: 'One run', value: 'once' }, { label: 'Unlimited', value: 'endless', alt: true }]);
+  let passMark = 0, restSecs = 0;
+  if (kind === 'endless') {
+    showUI('Pass mark per life? Fall short once and the session ends.');
+    passMark = await choose([{ label: '5', value: 5 }, { label: '10', value: 10 }]);
+    showUI('Rest between lives?');
+    restSecs = await choose([{ label: '30s', value: 30 }, { label: '60s', value: 60 }]);
+  }
+  const cal = await calibratePlayer('You');
   if (kind === 'once') {
     for (;;) {
       const { score: s } = await playRun(cal, '');
@@ -373,7 +383,7 @@ async function solo() {
       await tap('Play again');
     }
   }
-  return endless(cal);
+  return endless(cal, passMark, restSecs);
 }
 
 // Rest screen: counts down, or ends early on tap.
@@ -390,11 +400,7 @@ async function rest(seconds) {
 
 // Unlimited: life after life with a rest between. Score accumulates. It ends the first time a life
 // falls short of the pass mark.
-async function endless(cal) {
-  showUI('Pass mark per life? Fall short once and the session ends.');
-  const passMark = await choose([{ label: '5', value: 5 }, { label: '10', value: 10 }]);
-  showUI('Rest between lives?');
-  const restSecs = await choose([{ label: '30s', value: 30 }, { label: '60s', value: 60 }]);
+async function endless(cal, passMark, restSecs) {
   let sessionBest = +(localStorage.getItem('pdk-endless-best') || 0);
   for (;;) {
     let total = 0, life = 0;
