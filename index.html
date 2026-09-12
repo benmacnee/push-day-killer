@@ -408,24 +408,25 @@ async function versus() {
   }
 }
 
-// Co-op: one shared score. Players alternate; a turn ends after `target` gates (hand over) or a crash.
-// The team is out once both players crash back to back.
+// Co-op: one shared score. Players alternate, each going until they crash. A turn "passes" if it reaches
+// the pass mark; the team is out once both players fall short back to back.
 async function coop() {
-  showUI('Gates per turn before you swap?');
-  const target = await choose([{ label: '5', value: 5 }, { label: '10', value: 10 }]);
+  showUI('Pass mark per turn? Two short turns in a row and the team is out.');
+  const passMark = await choose([{ label: '5', value: 5 }, { label: '10', value: 10 }]);
   const players = await calibrateBoth();
   let teamBest = +(localStorage.getItem('pdk-coop-best') || 0);
   for (;;) {
     let total = 0, fails = 0, turn = 0;
-    showUI(`${players[0].name}, you're up first. Clear ${target} gates, then swap.`);
+    showUI(`${players[0].name}, you're up first. Go until you crash.`, `Clear ${passMark}+ gates to keep the team safe.`);
     await tap(`${players[0].name} ready`);
     while (fails < 2) {
       const p = players[turn % 2]; turn++;
-      const r = await playRun(p.cal, `${p.name} · clear ${target}`, { swapText: turn === 1 ? '' : `${p.name}, swap in!`, target, base: total });
+      const r = await playRun(p.cal, `${p.name} · pass mark ${passMark}`, { swapText: turn === 1 ? '' : `${p.name}, swap in!`, base: total });
       total += r.score;
-      fails = r.died ? fails + 1 : 0;
-      showUI(r.died ? `<span class="big">${r.score}</span><br>${p.name} crashed` : `<span class="big">${target}</span><br>${p.name} cleared the set!`, `Team total: ${total}`);
-      await wait(1200);
+      const passed = r.score >= passMark;
+      fails = passed ? 0 : fails + 1;
+      showUI(`<span class="big">${r.score}</span><br>${p.name} ${passed ? 'made the pass mark' : fails < 2 ? `fell short — one more and it's over` : 'fell short'}`, `Team total: ${total}`);
+      await wait(1500);
     }
     teamBest = Math.max(teamBest, total); localStorage.setItem('pdk-coop-best', teamBest);
     showUI(`<span class="big">${total}</span><br>gates as a team`, `Best team score: ${teamBest}`);
