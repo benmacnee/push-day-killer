@@ -363,11 +363,55 @@ async function playRun(cal, label, { swapText = '', target = 0, base = 0 } = {})
 
 async function solo() {
   const cal = await calibratePlayer('You');
+  showUI('One run, or keep going with rests?');
+  const kind = await choose([{ label: 'One run', value: 'once' }, { label: 'Unlimited', value: 'endless', alt: true }]);
+  if (kind === 'once') {
+    for (;;) {
+      const { score: s } = await playRun(cal, '');
+      best = Math.max(best, s); localStorage.setItem('pdk-best', best);
+      showUI(`<span class="big">${s}</span><br>gates cleared`, `Best: ${best}`);
+      await tap('Play again');
+    }
+  }
+  return endless(cal);
+}
+
+// Rest screen: counts down, or ends early on tap.
+async function rest(seconds) {
+  let skipped = false;
+  tap('Skip rest').then(() => { skipped = true; });
+  const end = performance.now() + seconds * 1000;
+  while (!skipped && performance.now() < end) {
+    showUI(`<span class="big">${Math.ceil((end - performance.now()) / 1000)}</span><br>rest`, 'Next life starts automatically');
+    await wait(250);
+  }
+  btn.onclick = null; btn.classList.add('hidden');
+}
+
+// Unlimited: life after life with a rest between. Score accumulates. It ends the first time a life
+// falls short of the pass mark.
+async function endless(cal) {
+  showUI('Pass mark per life? Fall short once and the session ends.');
+  const passMark = await choose([{ label: '5', value: 5 }, { label: '10', value: 10 }]);
+  showUI('Rest between lives?');
+  const restSecs = await choose([{ label: '30s', value: 30 }, { label: '60s', value: 60 }]);
+  let sessionBest = +(localStorage.getItem('pdk-endless-best') || 0);
   for (;;) {
-    const { score: s } = await playRun(cal, '');
-    best = Math.max(best, s); localStorage.setItem('pdk-best', best);
-    showUI(`<span class="big">${s}</span><br>gaps cleared`, `Best: ${best}`);
-    await tap('Play again');
+    let total = 0, life = 0;
+    showUI(`Go until you crash. Clear ${passMark}+ gates each life to keep going.`, `${restSecs}s rest between lives`);
+    await tap('Start');
+    for (;;) {
+      life++;
+      const { score: s } = await playRun(cal, `Life ${life} · pass mark ${passMark}`, { base: total });
+      total += s;
+      if (s < passMark) { showUI(`<span class="big">${s}</span><br>fell short of ${passMark}`, `Total: ${total}`); await wait(1500); break; }
+      showUI(`<span class="big">${s}</span><br>life ${life} done`, `Total: ${total}`); await wait(1500);
+      await rest(restSecs);
+    }
+    sessionBest = Math.max(sessionBest, total); localStorage.setItem('pdk-endless-best', sessionBest);
+    showUI(`<span class="big">${total}</span><br>gates over ${life} ${life === 1 ? 'life' : 'lives'}`, `Best session: ${sessionBest}`);
+    const again = await choose([{ label: 'Go again', value: true }, { label: 'Menu', value: false, alt: true }]);
+    if (!again) return location.reload();
   }
 }
 
