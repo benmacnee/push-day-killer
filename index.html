@@ -159,7 +159,7 @@ let pipes = [], birdY = H / 2, score = 0, best = +(localStorage.getItem('pdk-bes
 function reset() {
   pipes = []; trail = []; score = 0; spawnT = 1.2; dead = false;
   birdY = H / 2;
-  hud.textContent = '0';
+  hud.textContent = scoreBase;
 }
 
 function spawnPipe() {
@@ -186,7 +186,10 @@ function update(dt) {
   const bx = W * BIRD_X_FRAC;
   for (const p of pipes) {
     p.x -= SPEED * dt;
-    if (!p.passed && p.x + PIPE_W < bx) { p.passed = true; score++; hud.textContent = score; }
+    if (!p.passed && p.x + PIPE_W < bx) {
+      p.passed = true; score++; hud.textContent = scoreBase + score;
+      if (gateTarget && score >= gateTarget) { running = false; if (onDeath) onDeath(); return; }
+    }
     // collision: hit circles along the diver vs the two rock columns
     for (const off of HIT_OFFSETS) {
       const cx = bx + off;
@@ -197,7 +200,7 @@ function update(dt) {
   pipes = pipes.filter(p => p.x + PIPE_W > -10);
 }
 
-let onDeath = null;
+let onDeath = null, scoreBase = 0, gateTarget = 0;
 function die() {
   dead = true; running = false;
   if (navigator.vibrate) navigator.vibrate(200);
@@ -340,10 +343,14 @@ async function calibratePlayer(name) {
   }
 }
 
-// One run: countdown, play until death, resolve with the score.
-async function playRun(cal, label) {
+// One run: countdown, play until death (or until `target` gates are cleared), resolve with {score, died}.
+// `swapText` turns the countdown into a 3-second player swap.
+async function playRun(cal, label, { swapText = '', target = 0, base = 0 } = {}) {
   topY = cal.top; botY = cal.bot;
-  for (const n of ['3', '2', '1', 'GO']) { showUI(`<span class="big">${n}</span>`); await wait(700); }
+  const step = swapText ? 1000 : 700;
+  for (const n of ['3', '2', '1']) { showUI(`<span class="big">${n}</span>`, swapText); await wait(step); }
+  showUI('<span class="big">GO</span>', swapText); await wait(500);
+  scoreBase = base; gateTarget = target;
   reset();
   who.textContent = label; who.classList.toggle('hidden', !label);
   ui.classList.add('hidden'); hud.classList.remove('hidden'); hint.classList.remove('hidden');
@@ -351,45 +358,78 @@ async function playRun(cal, label) {
   await new Promise(res => { onDeath = res; });
   onDeath = null;
   hint.classList.add('hidden'); who.classList.add('hidden'); hud.classList.add('hidden');
-  return score;
+  return { score, died: dead };
 }
 
 async function solo() {
   const cal = await calibratePlayer('You');
   for (;;) {
-    const s = await playRun(cal, '');
+    const { score: s } = await playRun(cal, '');
     best = Math.max(best, s); localStorage.setItem('pdk-best', best);
     showUI(`<span class="big">${s}</span><br>gaps cleared`, `Best: ${best}`);
     await tap('Play again');
   }
 }
 
-async function twoPlayer() {
-  showUI('How many lives each?');
-  const lives = await choose([{ label: '3', value: 3 }, { label: '5', value: 5 }, { label: '7', value: 7 }]);
+async function calibrateBoth() {
   const players = [{ name: 'Player 1', cal: null, score: 0 }, { name: 'Player 2', cal: null, score: 0 }];
   for (const p of players) {
     showUI(`${p.name}: get in position in front of the camera.`);
     await tap(`${p.name} ready`);
     p.cal = await calibratePlayer(p.name);
   }
+  return players;
+}
+const totals = (a, b) => `${a.name}: ${a.score} · ${b.name}: ${b.score}`;
+
+async function versus() {
+  showUI('How many lives each?');
+  const lives = await choose([{ label: '3', value: 3 }, { label: '5', value: 5 }, { label: '7', value: 7 }]);
+  const players = await calibrateBoth();
   for (;;) {
     for (const p of players) p.score = 0;
+    showUI(`${players[0].name}, you're up first.`);
+    await tap(`${players[0].name} ready`);
+    let first = true;
     for (let life = 1; life <= lives; life++) {
       for (const p of players) {
-        const other = players[1 - players.indexOf(p)];
-        showUI(`${p.name}, you're up. Life ${life} of ${lives}.`, `${players[0].name}: ${players[0].score} · ${players[1].name}: ${players[1].score}`);
-        await tap(`${p.name} ready`);
-        const s = await playRun(p.cal, `${p.name} · life ${life}/${lives}`);
+        const { score: s } = await playRun(p.cal, `${p.name} · life ${life}/${lives}`, { swapText: first ? '' : `${p.name}, swap in! Life ${life} of ${lives}` });
+        first = false;
         p.score += s;
-        showUI(`<span class="big">${s}</span><br>${p.name} cleared ${s} gap${s === 1 ? '' : 's'}`, `Total · ${players[0].name}: ${players[0].score} · ${players[1].name}: ${players[1].score}`);
-        await wait(1800);
+        showUI(`<span class="big">${s}</span><br>${p.name} cleared ${s} gate${s === 1 ? '' : 's'}`, totals(...players));
+        await wait(1500);
       }
     }
     const [a, b] = players;
     const title = a.score === b.score ? 'Draw!' : `${a.score > b.score ? a.name : b.name} wins!`;
-    showUI(`<span class="big">${title}</span>`, `${a.name}: ${a.score} · ${b.name}: ${b.score}`);
+    showUI(`<span class="big">${title}</span>`, totals(a, b));
     const again = await choose([{ label: 'Rematch', value: true }, { label: 'New players', value: false, alt: true }]);
+    if (!again) return location.reload();
+  }
+}
+
+// Co-op: one shared score. Players alternate; a turn ends after `target` gates (hand over) or a crash.
+// The team is out once both players crash back to back.
+async function coop() {
+  showUI('Gates per turn before you swap?');
+  const target = await choose([{ label: '5', value: 5 }, { label: '10', value: 10 }]);
+  const players = await calibrateBoth();
+  let teamBest = +(localStorage.getItem('pdk-coop-best') || 0);
+  for (;;) {
+    let total = 0, fails = 0, turn = 0;
+    showUI(`${players[0].name}, you're up first. Clear ${target} gates, then swap.`);
+    await tap(`${players[0].name} ready`);
+    while (fails < 2) {
+      const p = players[turn % 2]; turn++;
+      const r = await playRun(p.cal, `${p.name} · clear ${target}`, { swapText: turn === 1 ? '' : `${p.name}, swap in!`, target, base: total });
+      total += r.score;
+      fails = r.died ? fails + 1 : 0;
+      showUI(r.died ? `<span class="big">${r.score}</span><br>${p.name} crashed` : `<span class="big">${target}</span><br>${p.name} cleared the set!`, `Team total: ${total}`);
+      await wait(1200);
+    }
+    teamBest = Math.max(teamBest, total); localStorage.setItem('pdk-coop-best', teamBest);
+    showUI(`<span class="big">${total}</span><br>gates as a team`, `Best team score: ${teamBest}`);
+    const again = await choose([{ label: 'Go again', value: true }, { label: 'New players', value: false, alt: true }]);
     if (!again) return location.reload();
   }
 }
@@ -417,8 +457,8 @@ async function main() {
   const ex = await choose([{ label: 'Push-ups', value: 'pushup' }, { label: 'Squats', value: 'squat', alt: true }]);
   exercise = EXERCISES[ex];
   showUI(exercise.setup, 'Who\'s playing?');
-  const mode = await choose([{ label: 'Solo', value: 'solo' }, { label: '2 Player', value: 'duo', alt: true }]);
-  if (mode === 'solo') await solo(); else await twoPlayer();
+  const mode = await choose([{ label: 'Solo', value: 'solo' }, { label: '2P Versus', value: 'versus', alt: true }, { label: '2P Co-op', value: 'coop', alt: true }]);
+  if (mode === 'solo') await solo(); else if (mode === 'versus') await versus(); else await coop();
 }
 main();
 
