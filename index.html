@@ -40,7 +40,7 @@
   <div id="hint" class="hidden"></div>
   <div id="ui">
     <h1>Push Day Killer 💀</h1>
-    <p id="msg">Push-ups or squats steer the diver through the cave. Or plank and balance the vase.</p>
+    <p id="msg">Push-ups or squats steer the diver through the cave. Or plank and keep Humpty Dumpty on his wall.</p>
     <p id="sub"></p>
     <div id="opts"></div>
     <button id="btn">Start</button>
@@ -69,7 +69,7 @@ const hands = { L: { y: null, seen: false }, R: { y: null, seen: false } }; // w
 const EXERCISES = {
   pushup: { idx: [11, 12], part: 'shoulders', setup: 'Prop your phone on the floor in front of you, screen facing you, so it can see your head and shoulders.', top: 'get into push-up position with your arms straight.', bottom: 'Now lower yourself all the way down and hold.' },
   squat:  { idx: [23, 24], part: 'hips', setup: 'Lean your phone against a wall and stand back so the camera sees you from head to knees.', top: 'stand tall, feet shoulder-width apart.', bottom: 'Now squat all the way down and hold.' },
-  // Plank balance: a different game. Lift a hand off the floor to push the wobbly vase back upright. Scores seconds.
+  // Plank balance: a different game. Lift a hand off the floor to push wobbly Humpty Dumpty back upright. Scores seconds.
   plank:  { idx: [11, 12], part: 'shoulders', kind: 'balance', unit: 'seconds', setup: 'Prop your phone on the floor in front of you. Get into a forearm plank facing the camera so it sees your head, shoulders and both hands.' },
 };
 const unit = () => exercise.unit || 'gates';
@@ -187,42 +187,76 @@ function updateBalance(dt) {
   const push = (v.up.L ? 1 : 0) - (v.up.R ? 1 : 0); // left hand pushes the vase to the right
   v.lean += (push - v.lean) * Math.min(1, dt * 14);
   if (dead) return;
-  const gravity = 2.2 + v.t * 0.06;
+  const gravity = 0.6 + v.t * 0.015;
   v.gustT -= dt;
-  if (v.gustT <= 0) { v.w += (Math.random() < 0.5 ? -1 : 1) * (0.5 + v.t * 0.02) * (0.6 + Math.random()); v.gustT = 1.2 + Math.random() * 1.8; }
-  const control = v.lean * 5;
+  if (v.gustT <= 0) { v.w += (Math.random() < 0.5 ? -1 : 1) * (0.25 + v.t * 0.01) * (0.6 + Math.random()); v.gustT = 1.5 + Math.random() * 2; }
+  const control = v.lean * 1.4;
   v.w += (gravity * Math.sin(v.th) + control) * dt;
   v.w *= (1 - 0.6 * dt);
   v.th += v.w * dt;
   const sec = Math.floor(v.t);
   if (sec !== score) { score = sec; hud.textContent = scoreBase + score; if (gateTarget && score >= gateTarget) { running = false; if (onDeath) onDeath(); return; } }
-  if (Math.abs(v.th) > 0.95) die();
+  if (Math.abs(v.th) > 1.05) die();
 }
 
 function drawBalance() {
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(0, 0, W, H);
-  const v = vase, bx = W / 2, by = H * 0.62, danger = Math.min(1, Math.abs(v.th) / 0.95);
-  // shelf
-  ctx.fillStyle = '#7a5230'; ctx.strokeStyle = '#1e1208'; ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.roundRect(bx - 110, by, 220, 18, 6); ctx.fill(); ctx.stroke();
-  // vase, pivoting on the edge it's tipping over
-  ctx.save(); ctx.translate(bx + Math.sign(v.th) * 26, by); ctx.rotate(v.th); ctx.translate(-Math.sign(v.th) * 26, 0);
-  const s = 1.2;
-  ctx.scale(s, s);
-  ctx.fillStyle = `rgb(${Math.round(230 + 25 * danger)},${Math.round(240 - 150 * danger)},${Math.round(250 - 190 * danger)})`;
-  ctx.strokeStyle = '#1e2a44'; ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(-22, 0); ctx.bezierCurveTo(-42, -30, -40, -75, -18, -95); ctx.lineTo(-22, -118); ctx.lineTo(22, -118); ctx.lineTo(18, -95);
-  ctx.bezierCurveTo(40, -75, 42, -30, 22, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = '#2a4fa8'; ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.ellipse(0, -60, 22, 10, 0, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(-30, -85); ctx.lineTo(30, -85); ctx.moveTo(-28, -30); ctx.lineTo(28, -30); ctx.stroke();
+  const v = vase, bx = W / 2, by = H * 0.6, danger = Math.min(1, Math.abs(v.th) / 1.05);
+  // brick wall
+  const wallW = Math.min(W - 40, 300), wx = bx - wallW / 2;
+  ctx.fillStyle = '#b8503a'; ctx.strokeStyle = '#4a1f14'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.rect(wx, by, wallW, H - by + 10); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,230,210,.55)'; ctx.lineWidth = 3;
+  for (let row = 0, y = by; y < H; row++, y += 26) {
+    ctx.beginPath(); ctx.moveTo(wx, y); ctx.lineTo(wx + wallW, y); ctx.stroke();
+    for (let x = wx + (row % 2 ? 0 : 30); x < wx + wallW; x += 60) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 26); ctx.stroke(); }
+  }
+  ctx.fillStyle = '#d9d0c0'; ctx.strokeStyle = '#4a1f14'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.roundRect(wx - 8, by - 12, wallW + 16, 16, 4); ctx.fill(); ctx.stroke(); // coping stone
+  // Humpty, pivoting on the edge of his base as he tips
+  ctx.save(); ctx.translate(bx, by - 12); ctx.rotate(v.th);
+  const S = Math.min(W, 420) / 375 * 1.9; ctx.scale(S, S);
+  ctx.lineWidth = 2.5; ctx.strokeStyle = '#2a1c10'; ctx.lineJoin = 'round';
+  const flail = danger * Math.sin(performance.now() / 60) * 0.6;
+  // legs dangling over the front of the wall
+  ctx.strokeStyle = '#2a1c10'; ctx.lineWidth = 2.5; ctx.fillStyle = '#2f80ed';
+  for (const sx of [-1, 1]) {
+    ctx.beginPath(); ctx.roundRect(sx * 14 - 7, -6, 14, 26, 6); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#222'; ctx.beginPath(); ctx.roundRect(sx * 14 - 9, 16, 18, 10, 5); ctx.fill(); ctx.stroke(); ctx.fillStyle = '#2f80ed';
+  }
+  // arms
+  ctx.lineCap = 'round'; ctx.lineWidth = 9; ctx.strokeStyle = '#f2dcc2';
+  for (const sx of [-1, 1]) { ctx.beginPath(); ctx.moveTo(sx * 30, -40); ctx.lineTo(sx * 58, -58 + sx * flail * 30); ctx.stroke(); }
+  ctx.lineWidth = 2.5; ctx.strokeStyle = '#2a1c10'; ctx.lineCap = 'butt';
+  // egg body (goes pink as he wobbles toward the edge)
+  ctx.fillStyle = `rgb(${Math.round(245)},${Math.round(236 - 110 * danger)},${Math.round(220 - 140 * danger)})`;
+  ctx.beginPath(); ctx.ellipse(0, -52, 38, 52, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  // trousers band + belt
+  ctx.save(); ctx.beginPath(); ctx.ellipse(0, -52, 38, 52, 0, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = '#2f80ed'; ctx.fillRect(-40, -30, 80, 40);
+  ctx.fillStyle = '#222'; ctx.fillRect(-40, -32, 80, 5);
+  ctx.restore();
+  ctx.beginPath(); ctx.ellipse(0, -52, 38, 52, 0, 0, Math.PI * 2); ctx.stroke();
+  // bow tie
+  ctx.fillStyle = '#d9342b'; ctx.beginPath(); ctx.moveTo(0, -38); ctx.lineTo(-11, -44); ctx.lineTo(-11, -32); ctx.closePath(); ctx.moveTo(0, -38); ctx.lineTo(11, -44); ctx.lineTo(11, -32); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // face
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-13, -70, 8, 0, Math.PI * 2); ctx.arc(13, -70, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(-13 + v.th * 6, -70, 3.5, 0, Math.PI * 2); ctx.arc(13 + v.th * 6, -70, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(240,120,120,.6)'; ctx.beginPath(); ctx.arc(-24, -58, 5, 0, Math.PI * 2); ctx.arc(24, -58, 5, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#2a1c10'; ctx.lineWidth = 2.5; ctx.beginPath();
+  if (danger < 0.45) ctx.arc(0, -58, 12, 0.15 * Math.PI, 0.85 * Math.PI); else ctx.ellipse(0, -50, 7, 5 + danger * 6, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // brows
+  ctx.beginPath(); ctx.moveTo(-21, -84); ctx.lineTo(-6, -82 - danger * 6); ctx.moveTo(21, -84); ctx.lineTo(6, -82 - danger * 6); ctx.stroke();
+  // hat
+  ctx.fillStyle = '#1f8a4c'; ctx.beginPath(); ctx.roundRect(-22, -104, 44, 6, 3); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.roundRect(-14, -122, 28, 20, 3); ctx.fill(); ctx.stroke();
   ctx.restore();
   // paw pushing from the side of the lifted hand
   const side = -Math.sign(v.lean), strength = Math.min(1, Math.abs(v.lean));
   if (strength > 0.08) {
-    ctx.save(); ctx.translate(bx + side * (78 + 30 * (1 - strength)), by - 60); ctx.scale(-side, 1);
+    ctx.save(); ctx.translate(bx + side * (110 + 30 * (1 - strength)), by - 110); ctx.scale(-side * 1.5, 1.5);
     ctx.globalAlpha = 0.35 + 0.65 * strength;
     ctx.fillStyle = '#c4884a'; ctx.strokeStyle = '#2a1c10'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.roundRect(-26, -16, 40, 32, 14); ctx.fill(); ctx.stroke();
@@ -240,7 +274,7 @@ function drawBalance() {
 }
 
 function reset() {
-  vase = { th: (Math.random() - 0.5) * 0.2, w: 0, t: 0, gustT: 2, lean: 0, up: { L: false, R: false } };
+  vase = { th: (Math.random() - 0.5) * 0.06, w: 0, t: 0, gustT: 2.5, lean: 0, up: { L: false, R: false } };
   pipes = []; trail = []; score = 0; spawnT = 1.2; dead = false;
   birdY = H / 2;
   hud.textContent = scoreBase;
