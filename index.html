@@ -40,7 +40,7 @@
   <div id="hint" class="hidden"></div>
   <div id="ui">
     <h1>Push Day Killer 💀</h1>
-    <p id="msg">Push-ups or squats steer the diver. Squeeze through the cave.</p>
+    <p id="msg">Push-ups or squats steer the diver through the cave. Or plank and balance the vase.</p>
     <p id="sub"></p>
     <div id="opts"></div>
     <button id="btn">Start</button>
@@ -62,13 +62,17 @@ function resize() {
 window.addEventListener('resize', resize); resize();
 
 // ---------- Face tracking ----------
-let detector = null, faceY = null, faceSeen = false, touchMode = false;
+let detector = null, faceY = null, faceSeen = false, touchMode = false, shoulderW = 0.3;
+const hands = { L: { y: null, seen: false }, R: { y: null, seen: false } }; // wrist heights, normalised
 // Which body part drives the diver. Push-ups track the shoulders (11, 12); squats track the hips (23, 24),
 // so bending forward at the waist doesn't count as going down.
 const EXERCISES = {
   pushup: { idx: [11, 12], part: 'shoulders', setup: 'Prop your phone on the floor in front of you, screen facing you, so it can see your head and shoulders.', top: 'get into push-up position with your arms straight.', bottom: 'Now lower yourself all the way down and hold.' },
   squat:  { idx: [23, 24], part: 'hips', setup: 'Lean your phone against a wall and stand back so the camera sees you from head to knees.', top: 'stand tall, feet shoulder-width apart.', bottom: 'Now squat all the way down and hold.' },
+  // Plank balance: a different game. Lift a hand off the floor to push the wobbly vase back upright. Scores seconds.
+  plank:  { idx: [11, 12], part: 'shoulders', kind: 'balance', unit: 'seconds', setup: 'Prop your phone on the floor in front of you. Get into a forearm plank facing the camera so it sees your head, shoulders and both hands.' },
 };
+const unit = () => exercise.unit || 'gates';
 let exercise = EXERCISES.pushup;
 
 async function startCamera() {
@@ -102,16 +106,24 @@ function pollFace() {
   if (l && r && (l.visibility ?? 1) > 0.4 && (r.visibility ?? 1) > 0.4) {
     const y = (l.y + r.y) / 2; // normalised, 0 = top of frame
     faceY = faceY === null ? y : faceY + (y - faceY) * 0.45;
+    shoulderW = Math.max(0.05, Math.abs(l.x - r.x));
     faceSeen = true;
   } else {
     faceSeen = false;
+  }
+  // Wrists: 15 is your left hand, which sits on the screen's left in the mirrored view.
+  for (const [key, i] of [['L', 15], ['R', 16]]) {
+    const w = lm && lm[i], h = hands[key];
+    if (w && (w.visibility ?? 1) > 0.3) { h.y = h.y === null ? w.y : h.y + (w.y - h.y) * 0.5; h.seen = true; } else h.seen = false;
   }
 }
 
 // Touch fallback (no camera): drag finger up/down.
 function enableTouchMode() {
   touchMode = true; faceSeen = true; faceY = 0.5; topY = 0.1; botY = 0.9;
-  const set = e => { const t = e.touches ? e.touches[0] : e; faceY = Math.min(1, Math.max(0, t.clientY / H)); };
+  // balance game in touch mode: hold the left or right half of the screen to "lift" that hand
+  const set = e => { const t = e.touches ? e.touches[0] : e; faceY = Math.min(1, Math.max(0, t.clientY / H)); touchHand = t.clientX < W / 2 ? 'L' : 'R'; };
+  ['touchend', 'touchcancel', 'mouseup'].forEach(ev => window.addEventListener(ev, () => { touchHand = null; }));
   ['touchstart', 'touchmove', 'mousedown', 'mousemove'].forEach(ev => window.addEventListener(ev, e => { if (ev.startsWith('mouse') && e.buttons === 0) return; set(e); }, { passive: true }));
 }
 
@@ -159,7 +171,76 @@ const PIPE_W = 64, GAP_FRAC = 0.30, SPEED = 175, SPAWN_EVERY = 1.7;
 let trail = [], trailT = 0;
 let pipes = [], birdY = H / 2, score = 0, best = +(localStorage.getItem('pdk-best') || 0), running = false, spawnT = 0, lastT = 0, dead = false;
 
+// Balance game: an inverted pendulum. Gravity and random nudges grow over time. Lifting a hand off the
+// floor pushes the vase away from that hand while it's up. Falls past ~55 degrees.
+let vase = { th: 0, w: 0, t: 0, gustT: 1.5, lean: 0, up: { L: false, R: false } };
+function handUp(key) {
+  if (touchMode) return touchHand === key;
+  const h = hands[key];
+  return h.seen && h.y < restHands[key] - shoulderW * 0.45; // wrist raised by nearly half a shoulder width
+}
+function updateBalance(dt) {
+  pollFace();
+  const v = vase;
+  v.t += dt;
+  v.up.L = handUp('L'); v.up.R = handUp('R');
+  const push = (v.up.L ? 1 : 0) - (v.up.R ? 1 : 0); // left hand pushes the vase to the right
+  v.lean += (push - v.lean) * Math.min(1, dt * 14);
+  if (dead) return;
+  const gravity = 2.2 + v.t * 0.06;
+  v.gustT -= dt;
+  if (v.gustT <= 0) { v.w += (Math.random() < 0.5 ? -1 : 1) * (0.5 + v.t * 0.02) * (0.6 + Math.random()); v.gustT = 1.2 + Math.random() * 1.8; }
+  const control = v.lean * 5;
+  v.w += (gravity * Math.sin(v.th) + control) * dt;
+  v.w *= (1 - 0.6 * dt);
+  v.th += v.w * dt;
+  const sec = Math.floor(v.t);
+  if (sec !== score) { score = sec; hud.textContent = scoreBase + score; if (gateTarget && score >= gateTarget) { running = false; if (onDeath) onDeath(); return; } }
+  if (Math.abs(v.th) > 0.95) die();
+}
+
+function drawBalance() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,.18)'; ctx.fillRect(0, 0, W, H);
+  const v = vase, bx = W / 2, by = H * 0.62, danger = Math.min(1, Math.abs(v.th) / 0.95);
+  // shelf
+  ctx.fillStyle = '#7a5230'; ctx.strokeStyle = '#1e1208'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.roundRect(bx - 110, by, 220, 18, 6); ctx.fill(); ctx.stroke();
+  // vase, pivoting on the edge it's tipping over
+  ctx.save(); ctx.translate(bx + Math.sign(v.th) * 26, by); ctx.rotate(v.th); ctx.translate(-Math.sign(v.th) * 26, 0);
+  const s = 1.2;
+  ctx.scale(s, s);
+  ctx.fillStyle = `rgb(${Math.round(230 + 25 * danger)},${Math.round(240 - 150 * danger)},${Math.round(250 - 190 * danger)})`;
+  ctx.strokeStyle = '#1e2a44'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-22, 0); ctx.bezierCurveTo(-42, -30, -40, -75, -18, -95); ctx.lineTo(-22, -118); ctx.lineTo(22, -118); ctx.lineTo(18, -95);
+  ctx.bezierCurveTo(40, -75, 42, -30, 22, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#2a4fa8'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.ellipse(0, -60, 22, 10, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-30, -85); ctx.lineTo(30, -85); ctx.moveTo(-28, -30); ctx.lineTo(28, -30); ctx.stroke();
+  ctx.restore();
+  // paw pushing from the side of the lifted hand
+  const side = -Math.sign(v.lean), strength = Math.min(1, Math.abs(v.lean));
+  if (strength > 0.08) {
+    ctx.save(); ctx.translate(bx + side * (78 + 30 * (1 - strength)), by - 60); ctx.scale(-side, 1);
+    ctx.globalAlpha = 0.35 + 0.65 * strength;
+    ctx.fillStyle = '#c4884a'; ctx.strokeStyle = '#2a1c10'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(-26, -16, 40, 32, 14); ctx.fill(); ctx.stroke();
+    for (const dy of [-12, 0, 12]) { ctx.beginPath(); ctx.arc(10, dy, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+    ctx.restore();
+  }
+  // hand indicators: light up when that hand is lifted
+  ctx.font = 'bold 22px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineWidth = 3; ctx.strokeStyle = '#111';
+  for (const [key, x] of [['L', W / 2 - 70], ['R', W / 2 + 70]]) {
+    ctx.fillStyle = v.up[key] ? '#ffd23f' : 'rgba(255,255,255,.8)';
+    ctx.beginPath(); ctx.arc(x, H - 70, 26, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#111'; ctx.fillText(key, x, H - 69);
+  }
+  ctx.textBaseline = 'alphabetic';
+}
+
 function reset() {
+  vase = { th: (Math.random() - 0.5) * 0.2, w: 0, t: 0, gustT: 2, lean: 0, up: { L: false, R: false } };
   pipes = []; trail = []; score = 0; spawnT = 1.2; dead = false;
   birdY = H / 2;
   hud.textContent = scoreBase;
@@ -173,6 +254,7 @@ function spawnPipe() {
 }
 
 function update(dt) {
+  if (exercise.kind === 'balance') return updateBalance(dt);
   pollFace();
   if (faceY !== null) {
     const target = birdTargetY();
@@ -203,7 +285,7 @@ function update(dt) {
   pipes = pipes.filter(p => p.x + PIPE_W > -10);
 }
 
-let onDeath = null, scoreBase = 0, gateTarget = 0;
+let onDeath = null, scoreBase = 0, gateTarget = 0, touchHand = null, restHands = { L: 0.9, R: 0.9 };
 function die() {
   dead = true; running = false;
   if (navigator.vibrate) navigator.vibrate(200);
@@ -296,6 +378,7 @@ function drawPlane(x, y, t) {
 }
 
 function draw() {
+  if (exercise.kind === 'balance') return drawBalance();
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = 'rgba(140,225,255,.28)'; ctx.fillRect(0, 0, W, H);
   for (const p of pipes) {
@@ -336,12 +419,31 @@ function choose(options) {
 }
 function showUI(text, subText = '') { msg.innerHTML = text; sub.textContent = subText; ui.classList.remove('hidden'); }
 
+async function calibrateCentre(name) {
+  btn.classList.add('hidden');
+  msg.innerHTML = `<span class="arrow" style="color:#1a9e3f">●</span><br>${name}: forearm plank, face the camera, hold still.`; sub.textContent = '';
+  await wait(2000);
+  const L = [], R = [];
+  const end = performance.now() + 3000;
+  while (performance.now() < end) {
+    sub.innerHTML = `<span class="big">${Math.ceil((end - performance.now()) / 1000)}</span>`;
+    msg.innerHTML = `<span class="arrow" style="color:#1a9e3f">●</span><br>Hold <b>STILL</b>, both hands on the floor`;
+    if (hands.L.seen) L.push(hands.L.y);
+    if (hands.R.seen) R.push(hands.R.y);
+    await wait(100);
+  }
+  sub.textContent = '';
+  if (L.length < 5 || R.length < 5) return null;
+  const med = a => { a.sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; };
+  return { top: 0, bot: 1, rest: { L: med(L), R: med(R) } };
+}
+
 async function calibratePlayer(name) {
   if (touchMode) return { top: 0.1, bot: 0.9 };
   for (;;) {
-    const cal = await calibrate(name);
+    const cal = exercise.kind === 'balance' ? await calibrateCentre(name) : await calibrate(name);
     if (cal) return cal;
-    showUI(`I couldn't see your ${exercise.part} move enough. ${exercise.setup} Then try again.`);
+    showUI(exercise.kind === 'balance' ? `I couldn't see both hands. ${exercise.setup} Then try again.` : `I couldn't see your ${exercise.part} move enough. ${exercise.setup} Then try again.`);
     await tap('Retry');
   }
 }
@@ -349,7 +451,7 @@ async function calibratePlayer(name) {
 // One run: countdown, play until death (or until `target` gates are cleared), resolve with {score, died}.
 // `swapText` turns the countdown into a 3-second player swap.
 async function playRun(cal, label, { swapText = '', target = 0, base = 0 } = {}) {
-  topY = cal.top; botY = cal.bot;
+  topY = cal.top; botY = cal.bot; if (cal.rest) restHands = cal.rest;
   const step = swapText ? 1000 : 700;
   for (const n of ['3', '2', '1']) { showUI(`<span class="big">${n}</span>`, swapText); await wait(step); }
   showUI('<span class="big">GO</span>', swapText); await wait(500);
@@ -379,7 +481,7 @@ async function solo() {
     for (;;) {
       const { score: s } = await playRun(cal, '');
       best = Math.max(best, s); localStorage.setItem('pdk-best', best);
-      showUI(`<span class="big">${s}</span><br>gates cleared`, `Best: ${best}`);
+      showUI(`<span class="big">${s}</span><br>${unit()}`, `Best: ${best}`);
       await tap('Play again');
     }
   }
@@ -404,7 +506,7 @@ async function endless(cal, passMark, restSecs) {
   let sessionBest = +(localStorage.getItem('pdk-endless-best') || 0);
   for (;;) {
     let total = 0, life = 0;
-    showUI(`Go until you crash. Clear ${passMark}+ gates each life to keep going.`, `${restSecs}s rest between lives`);
+    showUI(`Go until you crash. Get ${passMark}+ ${unit()} each life to keep going.`, `${restSecs}s rest between lives`);
     await tap('Start');
     for (;;) {
       life++;
@@ -415,7 +517,7 @@ async function endless(cal, passMark, restSecs) {
       await rest(restSecs);
     }
     sessionBest = Math.max(sessionBest, total); localStorage.setItem('pdk-endless-best', sessionBest);
-    showUI(`<span class="big">${total}</span><br>gates over ${life} ${life === 1 ? 'life' : 'lives'}`, `Best session: ${sessionBest}`);
+    showUI(`<span class="big">${total}</span><br>${unit()} over ${life} ${life === 1 ? 'life' : 'lives'}`, `Best session: ${sessionBest}`);
     const again = await choose([{ label: 'Go again', value: true }, { label: 'Menu', value: false, alt: true }]);
     if (!again) return location.reload();
   }
@@ -446,7 +548,7 @@ async function versus() {
         const { score: s } = await playRun(p.cal, `${p.name} · life ${life}/${lives}`, { swapText: first ? '' : `${p.name}, swap in! Life ${life} of ${lives}` });
         first = false;
         p.score += s;
-        showUI(`<span class="big">${s}</span><br>${p.name} cleared ${s} gate${s === 1 ? '' : 's'}`, totals(...players));
+        showUI(`<span class="big">${s}</span><br>${p.name}: ${s} ${unit()}`, totals(...players));
         await wait(1500);
       }
     }
@@ -467,7 +569,7 @@ async function coop() {
   let teamBest = +(localStorage.getItem('pdk-coop-best') || 0);
   for (;;) {
     let total = 0, fails = 0, turn = 0;
-    showUI(`${players[0].name}, you're up first. Go until you crash.`, `Clear ${passMark}+ gates to keep the team safe.`);
+    showUI(`${players[0].name}, you're up first. Go until you crash.`, `Get ${passMark}+ ${unit()} to keep the team safe.`);
     await tap(`${players[0].name} ready`);
     while (fails < 2) {
       const p = players[turn % 2]; turn++;
@@ -479,7 +581,7 @@ async function coop() {
       await wait(1500);
     }
     teamBest = Math.max(teamBest, total); localStorage.setItem('pdk-coop-best', teamBest);
-    showUI(`<span class="big">${total}</span><br>gates as a team`, `Best team score: ${teamBest}`);
+    showUI(`<span class="big">${total}</span><br>${unit()} as a team`, `Best team score: ${teamBest}`);
     const again = await choose([{ label: 'Go again', value: true }, { label: 'New players', value: false, alt: true }]);
     if (!again) return location.reload();
   }
@@ -505,7 +607,7 @@ async function main() {
     enableTouchMode();
   }
   showUI('Which exercise?');
-  const ex = await choose([{ label: 'Push-ups', value: 'pushup' }, { label: 'Squats', value: 'squat', alt: true }]);
+  const ex = await choose([{ label: 'Push-ups', value: 'pushup' }, { label: 'Squats', value: 'squat', alt: true }, { label: 'Plank balance', value: 'plank', alt: true }]);
   exercise = EXERCISES[ex];
   showUI(exercise.setup, 'Who\'s playing?');
   const mode = await choose([{ label: 'Solo', value: 'solo' }, { label: '2P Versus', value: 'versus', alt: true }, { label: '2P Co-op', value: 'coop', alt: true }]);
@@ -513,7 +615,7 @@ async function main() {
 }
 main();
 
-window.__pdk = { get pipes() { return pipes; }, get birdY() { return birdY; } }; // debug hook
+window.__pdk = { get pipes() { return pipes; }, get birdY() { return birdY; }, get vase() { return vase; } }; // debug hook
 requestAnimationFrame(loop);
 </script>
 </body>
